@@ -1,0 +1,29 @@
+[project]
+name = "flask-production-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Yemi Balogun", email = "slickact2006@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp==2.14.7",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+]
+
+[project.scripts]
+flask-production-mcp = "flask_production_mcp:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.5",
+]
