@@ -23,6 +23,65 @@ from flask_production_mcp.models.findings import (
 
 from enum import StrEnum
 
+# ---------------------------------------------------------------------------
+# Authentication detection
+# ---------------------------------------------------------------------------
+#
+# These names are intentionally framework-agnostic. The analyzer is looking
+# for recognizable authentication signals, not trying to prove that a
+# particular authentication implementation is secure.
+# ---------------------------------------------------------------------------
+
+AUTH_DECORATOR_NAMES: frozenset[str] = frozenset(
+    {
+        "login_required",
+        "fresh_login_required",
+        "jwt_required",
+        "jwt_required_optional",
+        "auth_required",
+        "authentication_required",
+        "authenticated",
+        "requires_auth",
+        "require_auth",
+        "requires_login",
+        "permission_required",
+        "permissions_required",
+        "role_required",
+        "roles_required",
+        "admin_required",
+        "staff_required",
+    }
+)
+
+
+AUTHENTICATION_FUNCTION_NAMES: frozenset[str] = frozenset(
+    {
+        "login_required",
+        "jwt_required",
+        "verify_jwt_in_request",
+        "authenticate",
+        "authenticate_user",
+        "require_auth",
+        "check_authentication",
+        "check_authenticated",
+        "verify_token",
+    }
+)
+
+
+AUTHENTICATION_IDENTIFIERS: frozenset[str] = frozenset(
+    {
+        "current_user",
+        "login_manager",
+        "jwt",
+        "token",
+        "access_token",
+        "authorization",
+        "authenticated",
+        "is_authenticated",
+        "verify_jwt_in_request",
+    }
+)
 
 class RouteRisk(StrEnum):
     """Abuse risk classification for application routes."""
@@ -187,40 +246,6 @@ def _normalize_secret_name(name: str) -> str:
     )
 
 
-def _looks_like_secret_name(name: str) -> bool:
-    """
-    Determine whether a variable name probably represents secret material.
-
-    Matching is deliberately conservative. Generic names such as ``key`` or
-    ``token`` alone are not enough because they are frequently used for
-    harmless application data.
-    """
-
-    normalized = _normalize_secret_name(name)
-
-    if normalized in {
-        "secret",
-        "password",
-        "passwd",
-        "token",
-        "api_key",
-        "apikey",
-        "client_secret",
-        "private_key",
-        "access_token",
-        "refresh_token",
-        "database_url",
-        "db_url",
-        "dsn",
-    }:
-        return True
-
-    return any(
-        pattern in normalized
-        for pattern in SECRET_NAME_PATTERNS
-    )
-
-
 def _looks_like_placeholder(value: str) -> bool:
     """Return True when a secret-looking value is obviously a placeholder."""
 
@@ -250,94 +275,6 @@ def _looks_like_placeholder(value: str) -> bool:
         marker in normalized
         for marker in placeholder_markers
     )
-
-
-def _looks_like_secret_value(value: str) -> bool:
-    """
-    Determine whether a literal string has characteristics of a secret.
-
-    Short strings are ignored because values such as ``"admin"`` or
-    ``"localhost"`` are unlikely to be useful credentials.
-    """
-
-    stripped = value.strip()
-
-    if _looks_like_placeholder(stripped):
-        return False
-
-    if len(stripped) < 8:
-        return False
-
-    return True
-
-
-def _secret_value_confidence(
-    variable_name: str,
-    value: str,
-) -> Confidence:
-    """
-    Determine confidence that a literal value is a real secret.
-
-    Provider-specific prefixes are the strongest signal. Explicit secret
-    configuration names are also treated as high confidence because names
-    such as FLUTTERWAVE_SECRET_KEY or JWT_SECRET strongly indicate that the
-    associated literal is credential material.
-
-    The value itself is never included in the finding.
-    """
-
-    # Known provider/token prefixes provide very strong evidence that the
-    # literal is an actual credential rather than ordinary configuration.
-    if any(
-        value.startswith(prefix)
-        for prefix in SECRET_VALUE_PREFIXES
-    ):
-        return Confidence.HIGH
-
-    normalized_name = _normalize_secret_name(variable_name)
-
-    # Explicit secret-bearing configuration names should also receive high
-    # confidence even when the provider does not expose a recognizable
-    # prefix. This covers credentials such as:
-    #
-    #     FLUTTERWAVE_SECRET_KEY = "..."
-    #     FLUTTERWAVE_SECRET_HASH = "..."
-    #     JWT_SECRET = "..."
-    #     STRIPE_SECRET_KEY = "..."
-    #
-    # The detector intentionally requires a sufficiently secret-like value
-    # before reaching this function, so generic configuration values are not
-    # promoted to high confidence here.
-    strong_secret_patterns = (
-        "secret",
-        "private_key",
-        "client_secret",
-        "api_key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-        "auth_token",
-        "password",
-        "passwd",
-    )
-
-    if any(
-        pattern in normalized_name
-        for pattern in strong_secret_patterns
-    ):
-        return Confidence.HIGH
-
-    # Database connection strings are sensitive, but they can sometimes
-    # contain development credentials or non-secret connection information.
-    # Keep them at medium confidence unless stronger evidence exists.
-    if normalized_name in {
-        "database_url",
-        "db_url",
-        "dsn",
-    }:
-        return Confidence.MEDIUM
-
-    return Confidence.MEDIUM
 
 
 def _get_imported_module_name(
@@ -879,17 +816,6 @@ SENSITIVE_ROUTE_PATTERNS: tuple[str, ...] = (
     "/payments",
     "/webhook",
 )
-
-
-def _is_sensitive_route(route: str) -> bool:
-    """Determine whether a route deserves rate-limit scrutiny."""
-
-    normalized = route.lower().rstrip("/") or "/"
-
-    return any(
-        pattern in normalized
-        for pattern in SENSITIVE_ROUTE_PATTERNS
-    )
 
 
 def _extract_route_path(
@@ -1564,44 +1490,11 @@ def analyze_python_file(
         )
     )
 
-    # Detect sensitive routes that have no recognizable authentication
-    # decorator. This is separate from rate-limit analysis because a route
-    # can be authenticated but still lack abuse protection.
-    findings.extend(
-        _find_unprotected_sensitive_routes_auth(
-            file_path,
-            tree,
-        )
-    )
 
     # Rate-limit analysis remains project-level. A limiter can be initialized
     # in extensions.py and consumed from routes.py, so checking it here would
     # create false positives.
     return findings
-
-
-def _is_analyzer_test_file(
-    file_path: Path,
-) -> bool:
-    """
-    Identify files that intentionally contain dangerous patterns.
-
-    The MCP's own analyzer test fixtures may contain eval(), exec(), or
-    pickle examples deliberately. Those examples must not cause the MCP
-    to report itself as vulnerable when developers run:
-
-        audit_security(".")
-
-    This is deliberately narrow rather than excluding the entire
-    analyzer package.
-    """
-
-    filename = file_path.name.lower()
-
-    return (
-        filename.startswith("test_")
-        or filename.endswith("_test.py")
-    )
 
 
 def analyze_security(
@@ -1685,6 +1578,30 @@ def analyze_security(
                     f"Failed to analyze {file_path}: {exc}"
                 )
 
+        # ---------------------------------------------------------------
+        # Project-level authentication detection
+        # ---------------------------------------------------------------
+        #
+        # Authentication can be defined in a completely different module
+        # from the route. Therefore SEC-AUTH-005 must be evaluated only
+        # after the entire project has been inspected.
+        # ---------------------------------------------------------------
+        try:
+            authentication_signals = _analyze_project_authentication(
+                project
+            )
+
+            findings.extend(
+                _analyze_project_authentication_routes(
+                    project,
+                    authentication_signals,
+                )
+            )
+
+        except Exception as exc:
+            errors.append(
+                f"Authentication project analysis failed: {exc}"
+            )
         # ---------------------------------------------------------------
         # Project-level rate-limit detection
         # ---------------------------------------------------------------
@@ -2019,44 +1936,6 @@ def _find_debug_configuration(
     return findings
 
 
-def _find_environment_file(
-    project_root: Path,
-) -> list[Finding]:
-    """Detect environment files that may contain application secrets."""
-
-    env_file = project_root / ".env"
-
-    if not env_file.is_file():
-        return []
-
-    return [
-        Finding(
-            id="SEC-CONFIG-002",
-            category="security",
-            severity=Severity.INFO,
-            confidence=Confidence.HIGH,
-            title="A .env file exists in the project",
-            description=(
-                "The project contains a .env file. Environment files "
-                "commonly contain credentials, API keys, database "
-                "passwords, and other sensitive configuration."
-            ),
-            recommendation=(
-                "Ensure .env is excluded from version control using "
-                ".gitignore. Production secrets should preferably be "
-                "provided through environment variables or a dedicated "
-                "secret-management system."
-            ),
-            file=str(env_file),
-            line=None,
-            metadata={
-                "filename": ".env",
-                "requires_gitignore_review": True,
-            },
-        )
-    ]
-
-
 def _find_rate_limit_configuration(
     tree: ast.AST,
 ) -> bool:
@@ -2135,225 +2014,6 @@ def _find_rate_limit_configuration(
     )
 
 
-def _check_rate_limiting(tree: ast.AST) -> Finding | None:
-    """
-    Create a finding when no recognizable rate limiting is present.
-    """
-
-    if _find_rate_limit_configuration(tree):
-        return None
-
-    return Finding(
-        id="SEC-AUTH-002",
-        category="security",
-        severity=Severity.HIGH,
-        confidence=Confidence.MEDIUM,
-        title="Rate limiting was not detected",
-        description=(
-            "No recognizable rate-limiting implementation was detected "
-            "in the application. Authentication, OTP, password reset, "
-            "account recovery, payment, and other abuse-sensitive "
-            "endpoints may be vulnerable to automated requests."
-        ),
-        recommendation=(
-            "Implement rate limiting for authentication, OTP, password "
-            "reset, account recovery, payment, and other abuse-sensitive "
-            "endpoints. Flask-Limiter or an equivalent distributed "
-            "rate-limiting solution can be used."
-        ),
-        file=None,
-        line=None,
-        metadata={
-            "requires_route_review": True,
-        },
-    )
-
-
-
-def _find_unprotected_sensitive_routes(
-    file_path: Path,
-    tree: ast.AST,
-) -> list[Finding]:
-    """
-    Find sensitive Flask routes without detectable rate limiting.
-
-    Static analysis cannot determine whether protection is supplied by:
-    - application-wide Flask-Limiter configuration,
-    - middleware,
-    - an API gateway,
-    - a reverse proxy,
-    - or another infrastructure component.
-
-    Findings therefore identify missing *detectable* protection rather
-    than claiming that a vulnerability definitely exists.
-    """
-
-    findings: list[Finding] = []
-
-    for node in ast.walk(tree):
-        if not isinstance(
-            node,
-            (ast.FunctionDef, ast.AsyncFunctionDef),
-        ):
-            continue
-
-        routes: list[str] = []
-
-        for decorator in node.decorator_list:
-            route = _extract_route_path(decorator)
-
-            if route:
-                routes.append(route)
-
-        if not routes:
-            continue
-
-        has_rate_limit, limiter_name = _has_rate_limit_decorator(node)
-
-        if has_rate_limit:
-            continue
-
-        if _is_rate_limit_exempt(node):
-            # Explicit exemptions should not be reported as missing
-            # protection. A future analyzer can separately report
-            # potentially dangerous exemptions.
-            continue
-
-        for route in routes:
-            risk = _classify_route_risk(route)
-
-            if risk is None:
-                continue
-
-            severity = (
-                Severity.HIGH
-                if risk == RouteRisk.HIGH
-                else Severity.MEDIUM
-            )
-
-            findings.append(
-                Finding(
-                    id="SEC-AUTH-003",
-                    category="security",
-                    severity=severity,
-                    confidence=Confidence.MEDIUM,
-                    title="Sensitive route has no detected rate limit",
-                    description=(
-                        f"The {risk.value}-risk route {route!r} "
-                        f"handled by {node.name} in {file_path.name} "
-                        "has no detectable route-level rate-limit "
-                        "decorator. Static analysis cannot determine "
-                        "whether equivalent protection exists globally "
-                        "or at the infrastructure layer."
-                    ),
-                    recommendation=(
-                        "Apply an explicit rate limit to this route "
-                        "or verify that equivalent application-wide, "
-                        "middleware, gateway, or reverse-proxy "
-                        "rate limiting is enforced."
-                    ),
-                    file=str(file_path),
-                    line=node.lineno,
-                    metadata={
-                        "route": route,
-                        "function": node.name,
-                        "risk": risk.value,
-                        "rate_limit": False,
-                        "requires_route_review": True,
-                    },
-                )
-            )
-
-    return findings
-
-def _find_unprotected_sensitive_routes_auth(
-    file_path: Path,
-    tree: ast.AST,
-) -> list[Finding]:
-    """
-    Find sensitive Flask routes without detectable authentication.
-
-    This is intentionally conservative. Static analysis cannot prove that
-    authentication is absent because protection may be supplied through:
-
-    - application-wide middleware,
-    - blueprint-level hooks,
-    - before_request handlers,
-    - Flask-Login configuration,
-    - API gateways,
-    - reverse proxies,
-    - custom decorators whose implementation is outside the file.
-
-    Therefore this finding means that no recognizable authentication
-    decorator was detected directly on the route.
-    """
-
-    findings: list[Finding] = []
-
-    for node in ast.walk(tree):
-        if not isinstance(
-            node,
-            (ast.FunctionDef, ast.AsyncFunctionDef),
-        ):
-            continue
-
-        routes: list[str] = []
-
-        for decorator in node.decorator_list:
-            route = _extract_route_path(decorator)
-
-            if route:
-                routes.append(route)
-
-        if not routes:
-            continue
-
-        # ---------------------------------------------------------------
-        # Look for recognizable authentication/authorization decorators.
-        #
-        # We deliberately recognize common Flask authentication patterns
-        # without requiring a particular authentication library.
-        # ---------------------------------------------------------------
-        if _has_authentication_decorator(node):
-            continue
-
-        for route in routes:
-            if not _is_sensitive_auth_route(route):
-                continue
-
-            findings.append(
-                Finding(
-                    id="SEC-AUTH-005",
-                    category="security",
-                    severity=Severity.HIGH,
-                    confidence=Confidence.MEDIUM,
-                    title="Sensitive route has no detected authentication",
-                    description=(
-                        f"The sensitive route {route!r} handled by "
-                        f"{node.name} in {file_path.name} has no "
-                        "recognizable authentication or authorization "
-                        "decorator. Static analysis cannot determine "
-                        "whether authentication is enforced globally "
-                        "or by infrastructure."
-                    ),
-                    recommendation=(
-                        "Protect this route with an explicit authentication "
-                        "or authorization mechanism, or verify that "
-                        "equivalent protection is enforced globally."
-                    ),
-                    file=str(file_path),
-                    line=node.lineno,
-                    metadata={
-                        "route": route,
-                        "function": node.name,
-                        "authentication_detected": False,
-                        "requires_authentication_review": True,
-                    },
-                )
-            )
-
-    return findings
-
 def _has_authentication_decorator(
     function_node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> bool:
@@ -2364,38 +2024,22 @@ def _has_authentication_decorator(
     tying the analyzer to one authentication framework.
     """
 
-    recognized_names: frozenset[str] = frozenset(
-        {
-            "login_required",
-            "fresh_login_required",
-            "jwt_required",
-            "jwt_required_optional",
-            "auth_required",
-            "authentication_required",
-            "authenticated",
-            "requires_auth",
-            "require_auth",
-            "requires_login",
-            "permission_required",
-            "permissions_required",
-            "role_required",
-            "roles_required",
-            "admin_required",
-            "staff_required",
-        }
-    )
-
     for decorator in function_node.decorator_list:
         name = _decorator_name(decorator)
 
         if not name:
             continue
 
-        # ``login_required`` and ``login_manager.login_required`` should
-        # both resolve to the final decorator component.
+        # A decorator may be represented as:
+        #
+        #     @login_required
+        #     @auth.login_required
+        #     @jwt_required()
+        #
+        # We therefore inspect only the final component.
         base_name = name.split(".")[-1].lower()
 
-        if base_name in recognized_names:
+        if base_name in AUTH_DECORATOR_NAMES:
             return True
 
     return False
@@ -2778,3 +2422,531 @@ def _analyze_project_rate_limiting(
             },
         )
     ]
+
+
+def _contains_authentication_signal(
+    node: ast.AST,
+) -> bool:
+    """
+    Determine whether an AST node contains recognizable authentication logic.
+
+    This is deliberately conservative. We are looking for strong signals
+    such as current_user.is_authenticated, JWT verification, authorization
+    headers, or calls to recognizable authentication functions.
+
+    The result means "authentication-like logic was detected", not
+    "authentication is definitely secure".
+    """
+
+    for child in ast.walk(node):
+        # ---------------------------------------------------------------
+        # Detect identifiers such as:
+        #
+        #     current_user
+        #     login_manager
+        #     authorization
+        # ---------------------------------------------------------------
+        if isinstance(child, ast.Name):
+            if child.id.lower() in AUTHENTICATION_IDENTIFIERS:
+                return True
+
+        # ---------------------------------------------------------------
+        # Detect:
+        #
+        #     current_user.is_authenticated
+        #     current_user.is_anonymous
+        # ---------------------------------------------------------------
+        if isinstance(child, ast.Attribute):
+            attribute_name = child.attr.lower()
+
+            if attribute_name in {
+                "is_authenticated",
+                "is_anonymous",
+            }:
+                return True
+
+            if attribute_name in {
+                "verify_jwt_in_request",
+                "login_required",
+                "authenticate",
+            }:
+                return True
+
+        # ---------------------------------------------------------------
+        # Detect authentication-related function calls.
+        #
+        # Examples:
+        #
+        #     authenticate()
+        #     verify_jwt_in_request()
+        #     login_required(...)
+        # ---------------------------------------------------------------
+        if isinstance(child, ast.Call):
+            function_name: str | None = None
+
+            if isinstance(child.func, ast.Name):
+                function_name = child.func.id
+
+            elif isinstance(child.func, ast.Attribute):
+                function_name = child.func.attr
+
+            if (
+                function_name
+                and function_name.lower()
+                in AUTHENTICATION_FUNCTION_NAMES
+            ):
+                return True
+
+    return False
+
+def _find_authentication_hooks(
+    file_path: Path,
+    tree: ast.AST,
+) -> dict[str, Any]:
+    """
+    Run the complete security analyzer against a Flask project.
+
+    Security analysis is performed in two layers:
+
+    1. File-level AST analysis:
+    - eval()
+    - exec()
+    - pickle deserialization
+    - debug configuration
+    - hardcoded credentials
+
+    2. Project-level analysis:
+    - authentication detection
+    - authenticated route detection
+    - Flask-Limiter
+    - recognized limiter initialization
+    - custom rate limiting
+    - global request hooks
+    - absence of recognizable rate limiting
+
+    Project-level analysis is performed only after the complete source tree
+    has been inspected so authentication and rate-limiting implementations
+    can be recognized across separate modules.
+    """
+
+    signals: dict[str, Any] = {
+        "global_authentication": False,
+        "blueprint_authentication": False,
+        "global_locations": [],
+        "blueprint_locations": [],
+    }
+
+    for node in ast.walk(tree):
+        if not isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+
+        has_before_request = False
+        hook_owner: str | None = None
+
+        for decorator in node.decorator_list:
+            # -----------------------------------------------------------
+            # Flask's normal syntax:
+            #
+            #     @app.before_request
+            #     @bp.before_request
+            #
+            # is represented as ast.Attribute.
+            #
+            # A previous implementation only accepted ast.Call, which
+            # caused these perfectly valid decorators to be ignored.
+            # -----------------------------------------------------------
+            target = decorator
+
+            # Also unwrap callable decorator syntax such as:
+            #
+            #     @some_hook(...)
+            #
+            # so that the detector remains tolerant of decorator calls.
+            if isinstance(target, ast.Call):
+                target = target.func
+
+            if not isinstance(target, ast.Attribute):
+                continue
+
+            if target.attr != "before_request":
+                continue
+
+            owner = target.value
+
+            # We need a simple name such as:
+            #
+            #     app.before_request
+            #     bp.before_request
+            #
+            # Dynamic expressions are intentionally ignored because their
+            # ownership cannot be determined safely with this AST-only
+            # analysis.
+            if not isinstance(owner, ast.Name):
+                continue
+
+            hook_owner = owner.id
+            has_before_request = True
+            break
+
+        if not has_before_request:
+            continue
+
+        # ---------------------------------------------------------------
+        # A before_request hook is not automatically authentication.
+        #
+        # For example:
+        #
+        #     @app.before_request
+        #     def load_cart():
+        #         ...
+        #
+        # should NOT suppress SEC-AUTH-005.
+        #
+        # We therefore require recognizable authentication logic inside
+        # the hook itself.
+        # ---------------------------------------------------------------
+        if not _contains_authentication_signal(node):
+            continue
+
+        location = {
+            "file": str(file_path),
+            "line": node.lineno,
+            "function": node.name,
+            "owner": hook_owner,
+        }
+
+        if hook_owner is None:
+            continue
+
+        normalized_owner = hook_owner.lower()
+
+        # ---------------------------------------------------------------
+        # Application-wide Flask hooks.
+        #
+        # Common examples:
+        #
+        #     @app.before_request
+        #     @application.before_request
+        #     @flask_app.before_request
+        #
+        # These protect routes across the application.
+        # ---------------------------------------------------------------
+        if normalized_owner in {
+            "app",
+            "application",
+            "flask_app",
+        }:
+            signals["global_authentication"] = True
+            signals["global_locations"].append(location)
+            continue
+
+        # ---------------------------------------------------------------
+        # Blueprint-level Flask hooks.
+        #
+        # Common examples:
+        #
+        #     @bp.before_request
+        #     @auth_bp.before_request
+        #     @account_blueprint.before_request
+        #
+        # Static analysis cannot always prove exactly which routes belong
+        # to a blueprint, so the project-level analyzer treats a detected
+        # blueprint authentication hook as protection conservatively.
+        # ---------------------------------------------------------------
+        if (
+            normalized_owner == "bp"
+            or normalized_owner.endswith("_bp")
+            or "blueprint" in normalized_owner
+        ):
+            signals["blueprint_authentication"] = True
+            signals["blueprint_locations"].append(location)
+
+    return signals
+
+def _analyze_project_authentication(
+    project_root: Path,
+) -> dict[str, Any]:
+    """
+    Build project-wide authentication signals.
+
+    The project may define authentication in one module and routes in
+    another, so authentication analysis must operate across the complete
+    source tree.
+    """
+
+    signals: dict[str, Any] = {
+        "global_authentication": False,
+        "blueprint_authentication": False,
+        "route_authentication": [],
+        "global_locations": [],
+        "blueprint_locations": [],
+    }
+
+    try:
+        python_files = project_root.rglob("*.py")
+    except OSError:
+        return signals
+
+    for file_path in python_files:
+        if not is_python_file(file_path):
+            continue
+
+        if should_exclude_path(file_path, project_root):
+            continue
+
+        try:
+            source = file_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            tree = ast.parse(
+                source,
+                filename=str(file_path),
+            )
+        except (OSError, SyntaxError):
+            continue
+
+        hook_signals = _find_authentication_hooks(
+            file_path,
+            tree,
+        )
+
+        if hook_signals["global_authentication"]:
+            signals["global_authentication"] = True
+
+        if hook_signals["blueprint_authentication"]:
+            signals["blueprint_authentication"] = True
+
+        signals["global_locations"].extend(
+            hook_signals["global_locations"]
+        )
+
+        signals["blueprint_locations"].extend(
+            hook_signals["blueprint_locations"]
+        )
+
+        # ---------------------------------------------------------------
+        # Collect directly authenticated routes.
+        # ---------------------------------------------------------------
+        for node in ast.walk(tree):
+            if not isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+
+            if not _has_authentication_decorator(node):
+                continue
+
+            for decorator in node.decorator_list:
+                route = _extract_route_path(decorator)
+
+                if route:
+                    signals["route_authentication"].append(
+                        {
+                            "route": route,
+                            "file": str(file_path),
+                            "line": node.lineno,
+                            "function": node.name,
+                        }
+                    )
+
+    return signals
+
+
+def _analyze_project_authentication_routes(
+    project_root: Path,
+    auth_signals: dict[str, Any],
+) -> list[Finding]:
+    """
+    Analyze sensitive routes using project-wide authentication signals.
+
+    A route is considered protected when authentication is detected:
+
+    1. directly on the route,
+    2. globally through app.before_request, or
+    3. through a recognized blueprint-level authentication hook.
+
+    Because blueprint ownership cannot always be statically proven, a
+    blueprint-level signal suppresses the finding conservatively rather
+    than generating a potentially incorrect vulnerability report.
+    """
+
+    findings: list[Finding] = []
+
+    try:
+        python_files = project_root.rglob("*.py")
+    except OSError:
+        return findings
+
+    # A global authentication hook protects routes throughout the
+    # application unless there is explicit evidence that a route is
+    # deliberately excluded.
+    global_authentication = bool(
+        auth_signals.get("global_authentication")
+    )
+
+    # Blueprint-level authentication is also treated as protection for now.
+    # A later phase can map blueprint names to routes precisely.
+    blueprint_authentication = bool(
+        auth_signals.get("blueprint_authentication")
+    )
+
+    for file_path in python_files:
+        if not is_python_file(file_path):
+            continue
+
+        if should_exclude_path(file_path, project_root):
+            continue
+
+        try:
+            source = file_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            tree = ast.parse(
+                source,
+                filename=str(file_path),
+            )
+        except (OSError, SyntaxError):
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+
+            routes: list[str] = []
+
+            for decorator in node.decorator_list:
+                route = _extract_route_path(decorator)
+
+                if route:
+                    routes.append(route)
+
+            if not routes:
+                continue
+
+            # Direct route-level authentication always wins.
+            if _has_authentication_decorator(node):
+                continue
+
+            # Project-wide authentication provides broader protection.
+            if global_authentication:
+                continue
+
+            # Blueprint-level authentication is currently treated as
+            # sufficient protection because statically determining exactly
+            # which blueprint owns every route is not always possible.
+            if blueprint_authentication:
+                continue
+
+            for route in routes:
+                if not _is_sensitive_auth_route(route):
+                    continue
+
+                findings.append(
+                    Finding(
+                        id="SEC-AUTH-005",
+                        category="security",
+                        severity=Severity.HIGH,
+                        confidence=Confidence.MEDIUM,
+                        title="Sensitive route has no detected authentication",
+                        description=(
+                            f"The sensitive route {route!r} handled by "
+                            f"{node.name} in {file_path.name} has no "
+                            "recognizable authentication or authorization "
+                            "mechanism at the route or project level."
+                        ),
+                        recommendation=(
+                            "Protect this route with an explicit "
+                            "authentication or authorization mechanism, "
+                            "or verify that equivalent protection is "
+                            "enforced globally."
+                        ),
+                        file=str(file_path),
+                        line=node.lineno,
+                        metadata={
+                            "route": route,
+                            "function": node.name,
+                            "authentication_detected": False,
+                            "global_authentication_detected": False,
+                            "blueprint_authentication_detected": False,
+                            "requires_authentication_review": True,
+                        },
+                    )
+                )
+
+    return findings
+
+
+def _looks_like_blueprint_before_request(
+    decorator: ast.expr,
+) -> bool:
+    """Return True when a decorator appears to be blueprint.before_request."""
+
+    if not isinstance(decorator, ast.Attribute):
+        if not isinstance(decorator, ast.Call):
+            return False
+
+        decorator = decorator.func
+
+    if not isinstance(decorator, ast.Attribute):
+        return False
+
+    return decorator.attr == "before_request"
+
+
+def _function_contains_authentication_evidence(
+    function_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """
+    Determine whether a function contains recognizable authentication logic.
+
+    Merely having a before_request hook is insufficient. We require evidence
+    such as ``current_user.is_authenticated`` or a recognizable authentication
+    helper/decorator.
+    """
+
+    authentication_names = {
+        "current_user",
+        "login_required",
+        "login_user",
+        "logout_user",
+        "auth_required",
+        "authenticate",
+        "authentication",
+        "authenticated",
+    }
+
+    for node in ast.walk(function_node):
+        # Detect:
+        #
+        #     current_user.is_authenticated
+        if isinstance(node, ast.Attribute):
+            if node.attr in {
+                "is_authenticated",
+                "is_anonymous",
+            }:
+                return True
+
+        # Detect recognizable authentication calls/names.
+        if isinstance(node, ast.Name):
+            if node.id.lower() in authentication_names:
+                return True
+
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id.lower() in authentication_names:
+                    return True
+
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr.lower() in authentication_names:
+                    return True
+
+    return False

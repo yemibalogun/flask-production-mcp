@@ -599,3 +599,124 @@ def profile():
         finding.id == "SEC-AUTH-005"
         for finding in result.findings
     )
+
+
+def test_global_before_request_authentication_is_recognized(
+    tmp_path: Path,
+) -> None:
+    """Global authentication hooks should suppress SEC-AUTH-005."""
+
+    write_python_file(
+        tmp_path,
+        "app/__init__.py",
+        """
+from flask import Flask
+from flask_login import current_user
+
+app = Flask(__name__)
+
+
+@app.before_request
+def authenticate_request():
+    if not current_user.is_authenticated:
+        return "unauthorized", 401
+""",
+    )
+
+    write_python_file(
+        tmp_path,
+        "app/routes.py",
+        """
+from flask import Blueprint
+
+bp = Blueprint("account", __name__)
+
+
+@bp.route("/account/profile")
+def profile():
+    return "profile"
+""",
+    )
+
+    result = analyze_security(tmp_path)
+
+    findings = [
+        finding
+        for finding in result.findings
+        if finding.id == "SEC-AUTH-005"
+    ]
+
+    assert not findings
+
+def test_blueprint_before_request_authentication_is_recognized(
+    tmp_path: Path,
+) -> None:
+    """Blueprint authentication should suppress sensitive-route findings."""
+
+    write_python_file(
+        tmp_path,
+        "app/routes.py",
+        """
+from flask import Blueprint
+from flask_login import current_user
+
+bp = Blueprint("account", __name__)
+
+
+@bp.before_request
+def authenticate_blueprint():
+    if not current_user.is_authenticated:
+        return "unauthorized", 401
+
+
+@bp.route("/account/profile")
+def profile():
+    return "profile"
+""",
+    )
+
+    result = analyze_security(tmp_path)
+
+    findings = [
+        finding
+        for finding in result.findings
+        if finding.id == "SEC-AUTH-005"
+    ]
+
+    assert not findings
+
+def test_generic_before_request_is_not_authentication(
+    tmp_path: Path,
+) -> None:
+    """Generic request hooks should not be mistaken for authentication."""
+
+    write_python_file(
+        tmp_path,
+        "app/routes.py",
+        """
+from flask import Blueprint
+
+bp = Blueprint("account", __name__)
+
+
+@bp.before_request
+def prepare_request():
+    pass
+
+
+@bp.route("/account/profile")
+def profile():
+    return "profile"
+""",
+    )
+
+    result = analyze_security(tmp_path)
+
+    findings = [
+        finding
+        for finding in result.findings
+        if finding.id == "SEC-AUTH-005"
+    ]
+
+    assert findings
+    assert findings[0].severity == Severity.HIGH

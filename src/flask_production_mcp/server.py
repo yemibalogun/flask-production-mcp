@@ -4,6 +4,7 @@ from flask_production_mcp.tools.project import inspect_flask_project
 from flask_production_mcp.tools.security import audit_security
 
 
+
 mcp = FastMCP(
     "Flask Production MCP",
     instructions=(
