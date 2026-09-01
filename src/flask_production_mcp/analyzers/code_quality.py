@@ -24,7 +24,7 @@ def analyze_code_quality_file(
 
     try:
         source = file_path.read_text(
-            encoding="utf-8",
+            encoding="utf-8-sig",
             errors="replace",
         )
     except OSError as exc:

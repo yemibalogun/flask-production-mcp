@@ -482,3 +482,71 @@ SECURITY
 ✓ Current scope is sufficient
 ✓ 73 tests passing
 → STOP ADDING FEATURES FOR NOW
+
+
+## -----------------------------------------------------------
+
+CONTEXT - You, Your Business, Your Customers
+- about-me.md
+- business-info.md
+- ideal-customer.md
+- offers.md
+- brand-voice.md
+
+business-context/
+├── about_me.md
+├── business_info.md
+├── ideal_customer.md
+├── offers.md
+├── brand_voice.md
+├── positioning.md
+├── value_proposition.md
+├── products_services.md
+├── customer_pain_points.md
+├── customer_journey.md
+├── sales_process.md
+├── marketing_strategy.md
+├── content_strategy.md
+├── competitive_advantage.md
+├── business_goals.md
+├── business_principles.md
+├── founder_story.md
+├── objection_handling.md
+├── faq.md
+├── case_studies.md
+├── proof_and_credibility.md
+├── terminology.md
+├── do_and_dont.md
+└── context_index.md
+
+├── technical_capabilities.md
+├── automation_expertise.md
+├── ai_capabilities.md
+├── target_industries.md
+├── project_qualification.md
+├── pricing_philosophy.md
+├── client_selection.md
+└── future_vision.md
+
+I want you to build a bunch of markdown files for my business. Interview me to extract the information from my brain to build it
+
+TOOLS - MCP Connector For Apps
+
+SKILLS - You SOPs, Your Special Sauce
+
+
+
+
+### ------------------------------------------------------------
+
+A systems-minded builder who creates clarity from complexity, uses technology to compress time, and wants to give businesses better ways to solve problems and scale.
+
+                                -------
+
+A small or medium-sized business that already has traction, is constrained by manual processes, is willing to invest $3k–$10k in solving meaningful problems, and has the ambition to grow substantially.
+
+Technology should create productive capacity, not merely reduce effort.
+
+Technology is the tool. Business improvement is the objective.
+
+We build automation solutions and help growing businesses scale.

@@ -1,7 +1,7 @@
 [project]
 name = "flask-production-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server that statically audits Flask apps for production readiness: architecture, security, database and code quality."
 readme = "README.md"
 authors = [
     { name = "Yemi Balogun", email = "slickact2006@gmail.com" }

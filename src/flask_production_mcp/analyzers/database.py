@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from flask_production_mcp.analyzers.exclusions import iter_python_files
 from flask_production_mcp.models.findings import Confidence, Finding, Severity
 
 
@@ -116,11 +117,6 @@ class DatabaseAnalysis:
     queries: list[DatabaseQuery] = field(default_factory=list)
 
     raw_sql: list[RawSQLUsage] = field(default_factory=list)
-
-    sqlalchemy_detected: bool = False
-    flask_sqlalchemy_detected: bool = False
-
-    parse_errors: list[dict[str, Any]] = field(default_factory=list)
 
     # Database-related imports provide useful context for determining which
     # AST constructs are actually database-oriented.
@@ -719,7 +715,7 @@ def analyze_database_files(
 
         try:
             source = file_path.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
 
@@ -941,7 +937,7 @@ def analyze_database(
         )
 
     if python_files is None:
-        python_files = root.rglob("*.py")
+        python_files = iter_python_files(root)
 
     files = [
         Path(path)
@@ -1289,7 +1285,7 @@ def _detect_potential_n_plus_one(
     for file_path in python_files:
         try:
             source = file_path.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
             tree = ast.parse(

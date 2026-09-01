@@ -1443,7 +1443,7 @@ def analyze_python_file(
 
     try:
         source = file_path.read_text(
-            encoding="utf-8",
+            encoding="utf-8-sig",
             errors="replace",
         )
     except OSError:
@@ -2175,7 +2175,7 @@ def _analyze_project_rate_limiting(
 
         try:
             source = file_path.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
 
@@ -2699,7 +2699,7 @@ def _analyze_project_authentication(
 
         try:
             source = file_path.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
             tree = ast.parse(
@@ -2804,7 +2804,7 @@ def _analyze_project_authentication_routes(
 
         try:
             source = file_path.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
             tree = ast.parse(

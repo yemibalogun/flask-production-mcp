@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-
 
 # Directories that normally contain tooling rather than application code.
 #
@@ -62,6 +62,58 @@ def should_exclude_path(
         directory in DEFAULT_EXCLUDED_DIRECTORIES
         for directory in resolved_path.parts
     )
+
+
+# Directory names that normally contain test code rather than the
+# application that gets deployed to production.
+_TEST_DIRECTORIES: frozenset[str] = frozenset(
+    {"tests", "test", "testing"}
+)
+
+
+def is_test_file(path: Path) -> bool:
+    """Return True when a path looks like test code rather than app code."""
+
+    if any(part in _TEST_DIRECTORIES for part in path.parts):
+        return True
+
+    name = path.name
+
+    return (
+        name == "conftest.py"
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
+
+
+def iter_python_files(
+    project_root: Path,
+    include_tests: bool = True,
+) -> Iterator[Path]:
+    """
+    Yield every analyzable Python source file within a project.
+
+    Tooling, cache, build, and virtual-environment directories are skipped
+    so analyzers never waste time on dependencies or report findings that
+    do not belong to the user's application. When ``include_tests`` is
+    False, test modules are skipped as well - useful for production-code
+    quality checks where test-only patterns (such as ``assert``) are
+    expected and not defects.
+    """
+
+    root = Path(project_root).expanduser().resolve()
+
+    for path in root.rglob("*.py"):
+        if not path.is_file():
+            continue
+
+        if should_exclude_path(path, root):
+            continue
+
+        if not include_tests and is_test_file(path):
+            continue
+
+        yield path
 
 
 def is_mcp_source_file(

@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Iterable
 
 from flask_production_mcp.models.findings import (
+    AuditResult,
     AuditSummary,
     Finding,
     Severity,
 )
-
 
 # The score starts at 100 and deductions are applied for findings.
 #
@@ -55,3 +55,43 @@ def is_python_file(path: Path) -> bool:
     """Return True when the supplied path is a Python source file."""
 
     return path.is_file() and path.suffix.lower() == ".py"
+
+
+def recommendations_from_findings(
+    findings: Iterable[Finding],
+) -> list[str]:
+    """Collect unique, order-preserving recommendations from findings."""
+
+    return list(
+        dict.fromkeys(
+            finding.recommendation
+            for finding in findings
+            if finding.recommendation
+            and finding.severity is not Severity.INFO
+        )
+    )
+
+
+def build_audit_result(
+    project_path: str | Path,
+    findings: Iterable[Finding],
+    errors: Iterable[str] | None = None,
+) -> AuditResult:
+    """
+    Assemble a standard :class:`AuditResult` from analyzer findings.
+
+    Every analyzer-backed MCP tool returns this same shape so an agent can
+    consume any audit response without special-casing the tool.
+    """
+
+    findings = list(findings)
+
+    return AuditResult(
+        success=True,
+        project_path=str(project_path),
+        score=calculate_score(findings),
+        findings=findings,
+        summary=build_summary(findings),
+        recommendations=recommendations_from_findings(findings),
+        errors=list(errors or []),
+    )

@@ -6,34 +6,22 @@ import ast
 from pathlib import Path
 from typing import Any
 
-
+from flask_production_mcp.analyzers.base import build_audit_result
+from flask_production_mcp.analyzers.exclusions import (
+    DEFAULT_EXCLUDED_DIRECTORIES,
+)
 from flask_production_mcp.models.findings import (
+    AuditResult,
     Confidence,
     Finding,
     Severity,
 )
 
-
 # Directories that normally contain generated dependencies, caches, or
 # version-control data. Traversing these would dramatically increase audit
-# time and could produce thousands of irrelevant files.
-IGNORED_DIRECTORIES: frozenset[str] = frozenset(
-    {
-        ".git",
-        ".hg",
-        ".svn",
-        ".venv",
-        "venv",
-        "env",
-        "__pycache__",
-        "node_modules",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ruff_cache",
-        "dist",
-        "build",
-    }
-)
+# time and could produce thousands of irrelevant files. The shared exclusion
+# set is reused so every analyzer skips the same directories.
+IGNORED_DIRECTORIES: frozenset[str] = DEFAULT_EXCLUDED_DIRECTORIES
 
 # Flask exposes both the generic ``.route()`` decorator and HTTP-method
 # shortcuts such as ``.get()`` and ``.post()``. Keeping these in one place
@@ -113,6 +101,52 @@ def discover_flask_project(project_path: str) -> dict[str, Any]:
         "flask_architecture": architecture,
     }
 
+def _collect_python_files(root: Path) -> list[Path]:
+    """Return every Flask application Python file under ``root``."""
+
+    python_files: list[Path] = []
+
+    for path in root.rglob("*.py"):
+        if any(part in IGNORED_DIRECTORIES for part in path.parts):
+            continue
+
+        if path.is_file():
+            python_files.append(path)
+
+    return python_files
+
+
+def analyze_flask(project_path: str | Path) -> AuditResult:
+    """
+    Audit a Flask application's architecture for production-readiness issues.
+
+    This complements :func:`discover_flask_project` (which only describes the
+    application) by returning structured findings and a score. Detected
+    issues currently include:
+
+    - explicitly enabled debug mode
+    - duplicate routes that resolve to the same method and path
+
+    The target application is never imported or executed.
+    """
+
+    root = Path(project_path).expanduser().resolve()
+
+    if not root.exists():
+        raise FileNotFoundError(f"Project path does not exist: {root}")
+
+    if not root.is_dir():
+        raise NotADirectoryError(f"Project path is not a directory: {root}")
+
+    python_files = _collect_python_files(root)
+
+    findings: list[Finding] = []
+    findings.extend(_detect_debug_configuration(python_files))
+    findings.extend(_detect_route_conflicts(python_files))
+
+    return build_audit_result(root, findings)
+
+
 def _detect_architecture(
     python_files: list[Path],
 ) -> dict[str, Any]:
@@ -140,7 +174,7 @@ def _detect_architecture(
     for source_file in python_files:
         try:
             source = source_file.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
             tree = ast.parse(source)
@@ -724,7 +758,7 @@ def _detect_indicators(
     for source_file in python_files:
         try:
             source = source_file.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
 
@@ -804,7 +838,7 @@ def _detect_debug_configuration(
     for file_path in python_files:
         try:
             source = file_path.read_text(
-                encoding="utf-8",
+                encoding="utf-8-sig",
                 errors="replace",
             )
             tree = ast.parse(source, filename=str(file_path))
