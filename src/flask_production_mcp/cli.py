@@ -21,6 +21,7 @@ _CATEGORY_ORDER = [
     "flask",
     "architecture",
     "templates",
+    "deployment",
     "security",
     "database",
     "dependencies",

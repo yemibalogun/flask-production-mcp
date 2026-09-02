@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,50 @@ def _find_requirements_files(root: Path) -> list[Path]:
             found.append(path)
 
     return sorted(found)
+
+
+_LOCK_FILES = ("uv.lock", "poetry.lock", "Pipfile.lock")
+
+
+def _packages_from_lockfile(lock_path: Path) -> list[tuple[str, str]] | None:
+    """Extract (name, version) pairs from a lock file, or None if unreadable."""
+
+    name = lock_path.name.lower()
+    try:
+        if name in {"uv.lock", "poetry.lock"}:
+            with lock_path.open("rb") as handle:
+                data = tomllib.load(handle)
+            packages = data.get("package", [])
+            pairs = [
+                (str(p["name"]), str(p["version"]))
+                for p in packages
+                if isinstance(p, dict) and p.get("name") and p.get("version")
+            ]
+            return pairs or None
+        if name == "pipfile.lock":
+            data = json.loads(lock_path.read_text(encoding="utf-8"))
+            pairs = []
+            for section in ("default", "develop"):
+                for pkg, meta in (data.get(section) or {}).items():
+                    version = str(meta.get("version", "")).lstrip("=")
+                    if version:
+                        pairs.append((pkg, version))
+            return pairs or None
+    except (OSError, tomllib.TOMLDecodeError, json.JSONDecodeError, KeyError):
+        return None
+    return None
+
+
+def _scan_target(
+    scan_input: Path,
+    report_as: Path,
+    root: Path,
+    timeout: int,
+) -> tuple[list[Finding], str | None]:
+    report, error = _run_pip_audit(scan_input, root, timeout)
+    if error is not None:
+        return [], error
+    return _findings_for_manifest(report_as, report or {}), None
 
 
 def _locate_package_line(manifest: Path, package: str) -> int | None:
@@ -243,33 +289,66 @@ def analyze_dependencies(
         raise ValueError(f"Dependency analysis root is invalid: {root}")
 
     manifests = _find_requirements_files(root)
+    lockfiles = [root / name for name in _LOCK_FILES if (root / name).is_file()]
     errors: list[str] = []
     findings: list[Finding] = []
+    scanned_names: list[str] = []
+    scanned_any = False
 
-    if not manifests:
+    if not manifests and not lockfiles:
         return {
             "findings": [],
             "errors": [
-                "No requirements*.txt file found; dependency scanning was "
-                "skipped (pyproject.toml / lock files are not yet supported)."
+                "No requirements*.txt or lock file (uv.lock / poetry.lock / "
+                "Pipfile.lock) found; dependency scanning was skipped."
             ],
             "manifests": [],
             "scanned": False,
         }
 
-    scanned_any = False
     for manifest in manifests:
-        report, error = _run_pip_audit(manifest, root, timeout)
+        extra, error = _scan_target(manifest, manifest, root, timeout)
+        scanned_names.append(manifest.name)
         if error is not None:
             errors.append(error)
             continue
         scanned_any = True
-        if report is not None:
-            findings.extend(_findings_for_manifest(manifest, report))
+        findings.extend(extra)
+
+    # Lock files only add value where nothing is already pinned in a
+    # requirements file for that project.
+    if not manifests:
+        for lock_path in lockfiles:
+            pairs = _packages_from_lockfile(lock_path)
+            if not pairs:
+                errors.append(f"Could not parse {lock_path.name}")
+                continue
+            with tempfile.NamedTemporaryFile(
+                "w",
+                suffix=".txt",
+                delete=False,
+                encoding="utf-8",
+            ) as handle:
+                handle.write(
+                    "\n".join(f"{name}=={version}" for name, version in pairs)
+                )
+                temp_path = Path(handle.name)
+            try:
+                extra, error = _scan_target(
+                    temp_path, lock_path, root, timeout
+                )
+            finally:
+                temp_path.unlink(missing_ok=True)
+            scanned_names.append(lock_path.name)
+            if error is not None:
+                errors.append(error)
+                continue
+            scanned_any = True
+            findings.extend(extra)
 
     return {
         "findings": findings,
         "errors": errors,
-        "manifests": [m.name for m in manifests],
+        "manifests": scanned_names,
         "scanned": scanned_any,
     }

@@ -15,9 +15,10 @@ security bugs?"* — across six areas:
 | **flask** | app-factory / blueprint discovery, route inventory, duplicate routes, debug mode enabled |
 | **architecture** | extensions bound at import time, module-level `Flask()` beside a factory, hardcoded `SECRET_KEY` fallback, `db.create_all()` instead of migrations, unguarded `app.run()`, unregistered blueprints |
 | **templates** | POST forms with no CSRF field, `\| safe` / `{% autoescape false %}` on dynamic data, `url_for()` to an endpoint that doesn't exist |
+| **deployment** | Dockerfile running as root, dev server as the container command, base image on `:latest`, debug mode via env, secrets baked into an image/compose file, DB port published to the host, Gunicorn `reload = True`, dev server in a Procfile/entrypoint, committed `.env` |
 | **security** | `eval`/`exec`, `pickle` loads, hardcoded secrets, missing auth on sensitive routes, **missing rate limiting**, debug config — plus **Bandit**, folded in and de-duplicated |
 | **database** | SQLAlchemy models / relationships / indexes, raw SQL, missing indexes on filtered columns, likely N+1 access |
-| **dependencies** | known CVEs in `requirements*.txt`, via **pip-audit** (PyPI + OSV advisory databases) |
+| **dependencies** | known CVEs in `requirements*.txt` — or `uv.lock` / `poetry.lock` / `Pipfile.lock` when there is no requirements file — via **pip-audit** (PyPI + OSV advisory databases) |
 | **code_quality** | bare/broad `except`, `print()`, `breakpoint()`, `assert` in app code, `TODO`/`FIXME` (test modules excluded) |
 
 All analysis is **static**. The target application is never imported or
@@ -167,6 +168,7 @@ Then: *"Run a production audit on /path/to/my_flask_app and list the blockers."*
 | `audit_flask` | Flask route/debug findings. |
 | `audit_architecture` | Flask-architecture rules. |
 | `audit_templates` | Jinja/HTML template findings. |
+| `audit_deployment` | Dockerfile / compose / Gunicorn / Procfile findings. |
 | `audit_security` | Security audit (incl. Bandit). |
 | `audit_database` | Database architecture + performance findings. |
 | `audit_dependencies` | Dependency CVE scan. |
@@ -197,15 +199,16 @@ src/flask_production_mcp/
 │   ├── templates.py        # Jinja/HTML rules
 │   ├── security.py         # analyze_security
 │   ├── bandit_scan.py      # Bandit integration
+│   ├── deployment.py       # Dockerfile / compose / Gunicorn rules
 │   ├── database.py         # analyze_database
-│   ├── dependencies.py     # pip-audit integration
+│   ├── dependencies.py     # pip-audit integration (requirements + lock files)
 │   ├── code_quality.py     # analyze_code_quality_file
-│   └── production.py       # analyze_production (unified)
+│   └── production.py       # analyze_production (unified, parallel)
 └── tools/                  # one thin MCP wrapper per analyzer
 ```
 
 ## Scope
 
-Not covered yet: Docker/Nginx/Gunicorn config, `pyproject.toml`/lock-file
-dependency scanning (only `requirements*.txt`), performance profiling,
+Not covered yet: Nginx config, bare `pyproject.toml` dependency scanning
+(lock files and `requirements*.txt` only), performance profiling,
 test-coverage analysis, and any dynamic/runtime testing.

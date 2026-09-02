@@ -50,6 +50,7 @@ def test_production_audit_runs_every_analyzer(
         "flask",
         "architecture",
         "templates",
+        "deployment",
         "security",
         "database",
         "dependencies",

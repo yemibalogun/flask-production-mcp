@@ -14,6 +14,7 @@ EXPECTED_TOOLS = {
     "audit_security",
     "audit_database",
     "audit_dependencies",
+    "audit_deployment",
     "audit_code_quality",
     "audit_flask_production",
 }

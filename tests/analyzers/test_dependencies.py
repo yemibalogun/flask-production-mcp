@@ -13,6 +13,7 @@ from flask_production_mcp.analyzers.dependencies import (
     _best_fix_version,
     _findings_for_manifest,
     _locate_package_line,
+    _packages_from_lockfile,
     analyze_dependencies,
 )
 
@@ -138,6 +139,60 @@ def test_analyze_dependencies_scan_error_is_not_clean(
     assert result["scanned"] is False
     assert result["findings"] == []
     assert "advisory database unreachable" in result["errors"]
+
+
+def test_packages_from_uv_lock(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "flask"\nversion = "3.1.3"\n\n'
+        '[[package]]\nname = "requests"\nversion = "2.19.1"\n',
+        encoding="utf-8",
+    )
+
+    pairs = _packages_from_lockfile(tmp_path / "uv.lock")
+
+    assert ("flask", "3.1.3") in pairs
+    assert ("requests", "2.19.1") in pairs
+
+
+def test_packages_from_pipfile_lock(tmp_path: Path) -> None:
+    (tmp_path / "Pipfile.lock").write_text(
+        '{"default": {"requests": {"version": "==2.19.1"}}, '
+        '"develop": {"pytest": {"version": "==9.1.1"}}}',
+        encoding="utf-8",
+    )
+
+    pairs = dict(_packages_from_lockfile(tmp_path / "Pipfile.lock"))
+
+    assert pairs["requests"] == "2.19.1"
+    assert pairs["pytest"] == "9.1.1"
+
+
+def test_analyze_dependencies_scans_lockfile_when_no_requirements(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "requests"\nversion = "2.19.1"\n',
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Path] = {}
+
+    def fake_run(scan_input, root, timeout):
+        captured["input"] = scan_input
+        return _SAMPLE_REPORT, None
+
+    monkeypatch.setattr(deps, "_run_pip_audit", fake_run)
+
+    result = analyze_dependencies(tmp_path)
+
+    assert result["scanned"] is True
+    assert result["manifests"] == ["uv.lock"]
+    # pip-audit was fed a generated requirements file, not the lock itself.
+    assert captured["input"].suffix == ".txt"
+    assert {f.metadata["package"] for f in result["findings"]} == {
+        "requests",
+        "idna",
+    }
 
 
 def test_backup_requirements_are_ignored(tmp_path: Path, monkeypatch) -> None:

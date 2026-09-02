@@ -177,13 +177,13 @@ def _detect_architecture(
                 encoding="utf-8-sig",
                 errors="replace",
             )
-            tree = ast.parse(source)
+            parsed_tree: ast.AST = ast.parse(source)
         except (OSError, SyntaxError):
             # A single malformed/unreadable source file should not prevent
             # analysis of the remainder of the application.
             continue
 
-        parsed_files.append((source_file, tree))
+        parsed_files.append((source_file, parsed_tree))
 
     # ------------------------------------------------------------------
     # Pass 2: discover Blueprint declarations and application factories.

@@ -32,6 +32,7 @@ from flask_production_mcp.analyzers.code_quality import (
 )
 from flask_production_mcp.analyzers.database import analyze_database
 from flask_production_mcp.analyzers.dependencies import analyze_dependencies
+from flask_production_mcp.analyzers.deployment import analyze_deployment
 from flask_production_mcp.analyzers.exclusions import iter_python_files
 from flask_production_mcp.analyzers.flask import (
     analyze_flask,
@@ -83,6 +84,14 @@ def _run_architecture(root: Path, errors: list[str]) -> list[Finding]:
         return list(analyze_architecture(root))
     except Exception as exc:  # pragma: no cover - defensive
         errors.append(f"Architecture analyzer failed: {exc}")
+        return []
+
+
+def _run_deployment(root: Path, errors: list[str]) -> list[Finding]:
+    try:
+        return list(analyze_deployment(root))
+    except Exception as exc:  # pragma: no cover - defensive
+        errors.append(f"Deployment analyzer failed: {exc}")
         return []
 
 
@@ -209,6 +218,7 @@ def analyze_production(
         "flask": lambda e: _run_flask(root, e),
         "architecture": lambda e: _run_architecture(root, e),
         "templates": lambda e: _run_templates(root, endpoints, e),
+        "deployment": lambda e: _run_deployment(root, e),
         "security": lambda e: _run_security(root, e, run_bandit),
         "database": lambda e: _run_database(root, e),
         "code_quality": lambda e: _run_code_quality(root, e),
@@ -237,6 +247,7 @@ def analyze_production(
         "flask": raw["flask"],
         "architecture": raw["architecture"],
         "templates": raw["templates"],
+        "deployment": raw["deployment"],
         "security": raw["security"],
         "database": raw["database"],
         "dependencies": dependency_findings,
