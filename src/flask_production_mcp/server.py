@@ -1,12 +1,14 @@
 from mcp.server.fastmcp import FastMCP
 
-from flask_production_mcp.tools.project import inspect_flask_project
-from flask_production_mcp.tools.flask_audit import audit_flask
-from flask_production_mcp.tools.security import audit_security
+from flask_production_mcp.tools.architecture import audit_architecture
 from flask_production_mcp.tools.code_quality import audit_code_quality
 from flask_production_mcp.tools.database import audit_database
+from flask_production_mcp.tools.dependencies import audit_dependencies
+from flask_production_mcp.tools.flask_audit import audit_flask
 from flask_production_mcp.tools.production import audit_flask_production
-
+from flask_production_mcp.tools.project import inspect_flask_project
+from flask_production_mcp.tools.security import audit_security
+from flask_production_mcp.tools.templates import audit_templates
 
 mcp = FastMCP(
     "Flask Production MCP",
@@ -22,8 +24,11 @@ mcp = FastMCP(
 
 mcp.tool()(inspect_flask_project)
 mcp.tool()(audit_flask)
+mcp.tool()(audit_architecture)
+mcp.tool()(audit_templates)
 mcp.tool()(audit_security)
 mcp.tool()(audit_database)
+mcp.tool()(audit_dependencies)
 mcp.tool()(audit_code_quality)
 mcp.tool()(audit_flask_production)
 

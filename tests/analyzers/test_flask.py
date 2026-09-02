@@ -291,6 +291,7 @@ admin_bp = Blueprint("admin", __name__)
             "file": str(
                 (tmp_path / "app/admin/routes.py").resolve()
             ),
+            "url_prefix": "",
         },
         {
             "name": "auth",
@@ -298,6 +299,7 @@ admin_bp = Blueprint("admin", __name__)
             "file": str(
                 (tmp_path / "app/auth/routes.py").resolve()
             ),
+            "url_prefix": "",
         },
     ]
 
@@ -505,6 +507,7 @@ def products():
             "name": "shop",
             "variable": "shop_bp",
             "file": str((package / "__init__.py").resolve()),
+            "url_prefix": "",
         }
     ]
 
@@ -675,6 +678,113 @@ def create_app():
     assert route["registration_prefix"] == ""
 
 
+def test_blueprint_constructor_url_prefix_is_applied(tmp_path: Path) -> None:
+    """A url_prefix on the Blueprint() constructor must resolve into full_path."""
+
+    source = """
+from flask import Blueprint, Flask
+
+contact_bp = Blueprint("contact", __name__, url_prefix="/contact")
+
+@contact_bp.get("/")
+def index():
+    return "contact"
+
+def create_app():
+    app = Flask(__name__)
+    app.register_blueprint(contact_bp)
+    return app
+"""
+
+    source_file = tmp_path / "app.py"
+    source_file.write_text(source, encoding="utf-8")
+
+    architecture = _detect_architecture([source_file])
+
+    blueprint = next(
+        bp for bp in architecture["blueprints"] if bp["name"] == "contact"
+    )
+    assert blueprint["url_prefix"] == "/contact"
+
+    route = next(
+        route
+        for route in architecture["routes"]
+        if route["endpoint"] == "index"
+    )
+    assert route["full_path"] == "/contact/"
+    assert route["registration_prefix"] == "/contact"
+
+
+def test_constructor_prefix_prevents_false_duplicate_route(
+    tmp_path: Path,
+) -> None:
+    """
+    Two blueprints each defining "/" are NOT a conflict when one carries a
+    distinct constructor url_prefix.
+    """
+
+    source = """
+from flask import Blueprint, Flask
+
+shop_bp = Blueprint("shop", __name__)
+contact_bp = Blueprint("contact", __name__, url_prefix="/contact")
+
+@shop_bp.route("/")
+def home():
+    return "home"
+
+@contact_bp.get("/")
+def index():
+    return "contact"
+
+def create_app():
+    app = Flask(__name__)
+    app.register_blueprint(shop_bp)
+    app.register_blueprint(contact_bp)
+    return app
+"""
+
+    source_file = tmp_path / "app.py"
+    source_file.write_text(source, encoding="utf-8")
+
+    findings = _detect_route_conflicts([source_file])
+
+    assert findings == []
+
+
+def test_registration_prefix_overrides_constructor_prefix(
+    tmp_path: Path,
+) -> None:
+    """register_blueprint(url_prefix=...) takes precedence over the constructor."""
+
+    source = """
+from flask import Blueprint, Flask
+
+api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+@api_bp.get("/health")
+def health():
+    return "ok"
+
+def create_app():
+    app = Flask(__name__)
+    app.register_blueprint(api_bp, url_prefix="/api/v2")
+    return app
+"""
+
+    source_file = tmp_path / "app.py"
+    source_file.write_text(source, encoding="utf-8")
+
+    architecture = _detect_architecture([source_file])
+
+    route = next(
+        route
+        for route in architecture["routes"]
+        if route["endpoint"] == "health"
+    )
+    assert route["full_path"] == "/api/v2/health"
+
+
 
 def test_detects_debug_mode_enabled_via_app_run(
     tmp_path: Path,
@@ -812,6 +922,58 @@ DEBUG = True
     assert finding.severity == Severity.HIGH
     assert finding.confidence == Confidence.HIGH
     assert finding.metadata["detection"] == "debug_constant"
+
+
+def test_ignores_debug_true_in_development_and_testing_config(
+    tmp_path: Path,
+) -> None:
+    """DEBUG=True inside a dev/test config class is correct code, not a finding."""
+
+    source_file = write_file(
+        tmp_path,
+        "config.py",
+        """
+class BaseConfig:
+    DEBUG = False
+
+
+class DevelopmentConfig(BaseConfig):
+    DEBUG = True
+
+
+class TestingConfig(BaseConfig):
+    TESTING = True
+    DEBUG = True
+""",
+    )
+
+    findings = _detect_debug_configuration([source_file])
+
+    assert findings == []
+
+
+def test_still_flags_debug_true_in_production_config_class(
+    tmp_path: Path,
+) -> None:
+    """A dev/test class nearby must not suppress a real finding elsewhere."""
+
+    source_file = write_file(
+        tmp_path,
+        "config.py",
+        """
+class DevelopmentConfig:
+    DEBUG = True
+
+
+class ProductionConfig:
+    DEBUG = True
+""",
+    )
+
+    findings = _detect_debug_configuration([source_file])
+
+    assert len(findings) == 1
+    assert findings[0].line is not None
 
 
 def test_debug_detection_handles_malformed_python_safely(

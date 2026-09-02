@@ -915,7 +915,8 @@ def analyze_database(
     Analyze database architecture, performance, and security characteristics.
 
     The analyzer performs static inspection only. It never imports or
-    executes the target Flask application.
+    executes the target Flask application. Test modules are skipped by
+    default because query patterns in fixtures are not production code.
 
     Results include:
 
@@ -937,7 +938,7 @@ def analyze_database(
         )
 
     if python_files is None:
-        python_files = iter_python_files(root)
+        python_files = iter_python_files(root, include_tests=False)
 
     files = [
         Path(path)

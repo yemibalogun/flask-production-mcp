@@ -9,8 +9,11 @@ from flask_production_mcp.server import mcp
 EXPECTED_TOOLS = {
     "inspect_flask_project",
     "audit_flask",
+    "audit_architecture",
+    "audit_templates",
     "audit_security",
     "audit_database",
+    "audit_dependencies",
     "audit_code_quality",
     "audit_flask_production",
 }

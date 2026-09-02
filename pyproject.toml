@@ -8,7 +8,9 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "bandit>=1.9.4",
     "fastmcp==2.14.7",
+    "pip-audit>=2.10.1",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
 ]

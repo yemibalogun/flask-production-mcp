@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from flask_production_mcp.server import mcp
+import sys
 
 
 def main() -> None:
-    """Start the Flask Production MCP server."""
-    mcp.run()
+    """Entry point: dispatch to the CLI (bare invocation starts the server)."""
+
+    from flask_production_mcp.cli import main as cli_main
+
+    raise SystemExit(cli_main(sys.argv[1:]))

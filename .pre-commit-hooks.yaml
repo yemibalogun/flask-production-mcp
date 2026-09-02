@@ -1,0 +1,12 @@
+- id: flask-production-audit
+  name: Flask production audit
+  description: >-
+    Static production-readiness audit for Flask apps. Fails the commit on
+    blockers only (high-confidence critical/high findings). Runs offline:
+    the dependency CVE scan and Bandit are skipped - enable them in CI.
+  entry: flask-production-mcp audit
+  args: ["--skip-deps", "--skip-bandit", "-q"]
+  language: python
+  pass_filenames: false
+  require_serial: true
+  files: \.(py|html|htm|jinja|jinja2|j2)$

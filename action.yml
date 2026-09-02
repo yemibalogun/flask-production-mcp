@@ -1,0 +1,48 @@
+name: "Flask Production Audit"
+description: "Static production-readiness audit for Flask applications (architecture, templates, security, database, dependencies, code quality)."
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Path to the Flask project to audit."
+    default: "."
+  fail-on:
+    description: "Policy that fails the job: blockers | advisories | any | never."
+    default: "blockers"
+  skip-deps:
+    description: "Skip the dependency CVE scan (pip-audit)."
+    default: "false"
+  skip-bandit:
+    description: "Skip the Bandit scan."
+    default: "false"
+  python-version:
+    description: "Python version to run the audit with."
+    default: "3.13"
+  args:
+    description: "Extra arguments passed through to `flask-production-mcp audit`."
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install flask-production-mcp
+      shell: bash
+      run: pip install "${{ github.action_path }}"
+
+    - name: Run audit
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=( audit "${{ inputs.path }}" --github --fail-on "${{ inputs.fail-on }}" )
+        [ "${{ inputs.skip-deps }}" = "true" ] && args+=( --skip-deps )
+        [ "${{ inputs.skip-bandit }}" = "true" ] && args+=( --skip-bandit )
+        # shellcheck disable=SC2206
+        args+=( ${{ inputs.args }} )
+        flask-production-mcp "${args[@]}"

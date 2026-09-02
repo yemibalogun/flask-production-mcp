@@ -234,6 +234,7 @@ def _detect_architecture(
     _apply_blueprint_registration_prefixes(
         routes=routes,
         registrations=blueprint_registrations,
+        blueprints=blueprints,
     )
 
     blueprints.sort(
@@ -318,6 +319,10 @@ def _detect_blueprint_assignment(
             "name": blueprint_name.value,
             "variable": target.id,
             "file": str(source_file.resolve()),
+            # Flask lets a Blueprint carry its own url_prefix on the
+            # constructor. If register_blueprint() does not override it,
+            # this is the prefix that actually applies to every route.
+            "url_prefix": _extract_url_prefix(call),
         }
     )
 
@@ -424,6 +429,7 @@ def _extract_url_prefix(
 def _apply_blueprint_registration_prefixes(
     routes: list[dict[str, Any]],
     registrations: list[dict[str, Any]],
+    blueprints: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Attach Blueprint registration information and effective URL paths
@@ -432,6 +438,11 @@ def _apply_blueprint_registration_prefixes(
     Routes belonging to a Blueprint may have zero, one, or multiple
     registrations. Flask technically allows the same Blueprint to be
     registered multiple times, potentially with different prefixes.
+
+    A Blueprint can also carry a ``url_prefix`` on its constructor. Flask
+    uses the registration-time ``url_prefix`` when one is supplied, and
+    otherwise falls back to the constructor prefix, so the effective
+    prefix here is ``registration prefix or constructor prefix``.
 
     Therefore we do not overwrite the original ``path`` field. Instead,
     ``full_path`` represents the effective path when exactly one registration
@@ -446,6 +457,11 @@ def _apply_blueprint_registration_prefixes(
             [],
         ).append(registration)
 
+    constructor_prefix_by_blueprint: dict[str, str] = {
+        blueprint["name"]: blueprint.get("url_prefix", "")
+        for blueprint in (blueprints or [])
+    }
+
     for route in routes:
         blueprint = route.get("blueprint")
 
@@ -455,21 +471,33 @@ def _apply_blueprint_registration_prefixes(
             route["full_path"] = route["path"]
             continue
 
+        constructor_prefix = constructor_prefix_by_blueprint.get(
+            blueprint,
+            "",
+        )
+
         matching_registrations = registrations_by_blueprint.get(
             blueprint,
             []
         )
 
         if not matching_registrations:
-            # The Blueprint declaration was found, but no static registration
-            # could be resolved. Keep the original route path rather than
-            # inventing a prefix.
-            route["registration_prefix"] = None
-            route["full_path"] = route["path"]
+            # No static registration was resolved. The Blueprint's own
+            # constructor prefix (if any) still applies in Flask.
+            route["registration_prefix"] = (
+                constructor_prefix if constructor_prefix else None
+            )
+            route["full_path"] = _join_route_paths(
+                constructor_prefix,
+                route["path"],
+            )
             continue
 
         if len(matching_registrations) == 1:
-            prefix = matching_registrations[0]["url_prefix"]
+            prefix = (
+                matching_registrations[0]["url_prefix"]
+                or constructor_prefix
+            )
 
             route["registration_prefix"] = prefix
             route["full_path"] = _join_route_paths(
@@ -484,7 +512,7 @@ def _apply_blueprint_registration_prefixes(
 
         for registration in matching_registrations:
             full_path = _join_route_paths(
-                registration["url_prefix"],
+                registration["url_prefix"] or constructor_prefix,
                 route["path"],
             )
 
@@ -815,6 +843,43 @@ def _detect_indicators(
 
 
 
+# Class-name fragments that identify a configuration class which, by
+# convention, is never loaded in production. A literal ``DEBUG = True`` in
+# one of these is correct code, not a finding.
+_NONPRODUCTION_CONFIG_CLASS_HINTS: tuple[str, ...] = (
+    "dev",
+    "development",
+    "test",
+    "testing",
+    "local",
+    "debug",
+)
+
+
+def _nonproduction_class_line_ranges(
+    tree: ast.AST,
+) -> list[tuple[int, int]]:
+    """Line ranges of classes whose name marks them as dev/test-only config."""
+
+    ranges: list[tuple[int, int]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+
+        lowered = node.name.lower()
+
+        if not any(
+            hint in lowered for hint in _NONPRODUCTION_CONFIG_CLASS_HINTS
+        ):
+            continue
+
+        end = getattr(node, "end_lineno", None) or node.lineno
+        ranges.append((node.lineno, end))
+
+    return ranges
+
+
 def _detect_debug_configuration(
     python_files: list[Path],
 ) -> list[Finding]:
@@ -824,6 +889,11 @@ def _detect_debug_configuration(
     Only literal ``True`` values are reported. Environment-controlled or
     dynamically computed values are intentionally ignored because static
     analysis cannot determine their production-time value.
+
+    A literal debug assignment inside a class whose name marks it as
+    development/testing configuration (e.g. ``DevelopmentConfig``) is
+    treated as correct code and skipped. ``app.run(debug=True)`` is always
+    reported because it is never production-safe.
 
     Supported patterns include:
 
@@ -846,6 +916,8 @@ def _detect_debug_configuration(
             # A malformed file should never prevent the remaining project
             # files from being analyzed.
             continue
+
+        skip_ranges = _nonproduction_class_line_ranges(tree)
 
         for node in ast.walk(tree):
 
@@ -895,6 +967,14 @@ def _detect_debug_configuration(
                             )
 
             if not isinstance(node, ast.Assign):
+                continue
+
+            # A literal debug assignment inside a development/testing config
+            # class is correct code, so it is not reported.
+            if any(
+                start <= node.lineno <= end
+                for start, end in skip_ranges
+            ):
                 continue
 
             # Only simple single-target assignments are considered. This

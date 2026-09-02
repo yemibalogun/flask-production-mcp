@@ -1,0 +1,31 @@
+# Copy to `flask-production.toml` in your project root, or move this table
+# into `pyproject.toml` as [tool.flask-production].
+
+# What makes an audit "fail" (CLI exit 1 / GitHub job red):
+#   blockers   - high-confidence critical/high findings (default)
+#   advisories - also fail on medium / lower-confidence high findings
+#   any        - fail on anything, including low-severity notes
+#   never      - report only, never fail
+fail_on = "blockers"
+
+# A category whose confidence-weighted score drops below this also blocks.
+category_floor = 50
+
+# Heavy scanners. Turn off for offline or fast (pre-commit) runs; CI
+# should leave them on.
+scan_dependencies = true
+run_bandit = true
+
+# Drop specific rules entirely (by finding id).
+ignore = [
+  # "DB-PERF-001",   # noisy on small tables
+  # "CQ-CODE-002",   # broad-except is an accepted pattern here
+]
+
+# If non-empty, ONLY these rules run.
+select = []
+
+# Re-grade individual rules for this project.
+[severity]
+# "TMPL-SAFE-001" = "medium"
+# "ARCH-SEC-001"  = "high"

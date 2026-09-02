@@ -116,6 +116,36 @@ def iter_python_files(
         yield path
 
 
+_TEMPLATE_SUFFIXES: frozenset[str] = frozenset(
+    {".html", ".htm", ".jinja", ".jinja2", ".j2", ".xml", ".txt"}
+)
+
+
+def iter_template_files(project_root: Path) -> Iterator[Path]:
+    """
+    Yield candidate Jinja/HTML template files within a project.
+
+    Only files under a directory named ``templates`` are considered so
+    that arbitrary ``.txt``/``.xml`` files elsewhere are not scanned as
+    templates. Tooling and dependency directories are excluded.
+    """
+
+    root = Path(project_root).expanduser().resolve()
+
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+
+        if path.suffix.lower() not in _TEMPLATE_SUFFIXES:
+            continue
+
+        if should_exclude_path(path, root):
+            continue
+
+        if path.suffix.lower() in {".html", ".htm"} or "templates" in path.parts:
+            yield path
+
+
 def is_mcp_source_file(
     path: Path,
     package_root: Path,

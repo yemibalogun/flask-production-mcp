@@ -1499,11 +1499,12 @@ def analyze_python_file(
 
 def analyze_security(
     project_root: Path,
+    run_bandit: bool = True,
 ) -> AuditResult:
     """
     Run the complete security analyzer against a Flask project.
 
-    Security analysis is performed in two layers:
+    Security analysis is performed in three layers:
 
     1. File-level AST analysis:
        - eval()
@@ -1518,6 +1519,9 @@ def analyze_security(
        - custom rate limiting
        - global request hooks
        - absence of recognizable rate limiting
+
+    3. Bandit (``run_bandit``), folded in and de-duplicated against the
+       Flask-aware rules above.
 
     Keeping these layers separate prevents a route-level check from
     incorrectly concluding that the entire project has no rate limiter.
@@ -1626,6 +1630,18 @@ def analyze_security(
         errors.append(
             f"Unable to enumerate project files: {exc}"
         )
+
+    if run_bandit:
+        try:
+            from flask_production_mcp.analyzers.bandit_scan import (
+                bandit_findings,
+            )
+
+            extra, bandit_errors = bandit_findings(project, findings)
+            findings.extend(extra)
+            errors.extend(bandit_errors)
+        except Exception as exc:  # pragma: no cover - defensive
+            errors.append(f"Bandit scan failed: {exc}")
 
     summary = build_summary(findings)
     score = calculate_score(findings)
@@ -2340,16 +2356,17 @@ def _analyze_project_rate_limiting(
     #
     # IMPORTANT:
     #
-    # This is NOT reported as rate limiting.
-    #
-    # For example:
+    # This is NOT reported as rate limiting. An unrelated hook such as:
     #
     #     @app.before_request
     #     def enforce_session_timeout():
     #         ...
     #
-    # is unrelated to request-rate limiting.
+    # must NOT suppress the "rate limiting was not detected" finding.
+    # We surface the hook for review AND still fall through to CASE 7.
     # ==================================================================
+    findings: list[Finding] = []
+
     if project_signals["global_hook_detected"]:
         location = (
             project_signals["global_locations"][0]
@@ -2357,7 +2374,7 @@ def _analyze_project_rate_limiting(
             else {}
         )
 
-        return [
+        findings.append(
             Finding(
                 id="SEC-AUTH-004",
                 category="security",
@@ -2385,12 +2402,15 @@ def _analyze_project_rate_limiting(
                     "global_hooks": project_signals["global_locations"],
                 },
             )
-        ]
+        )
 
     # ==================================================================
-    # CASE 7: Nothing recognizable was found.
+    # CASE 7: No recognizable rate limiting was found anywhere. Reaching
+    # this point means CASES 1-5 all failed, so regardless of whether an
+    # unrelated global hook exists, the project has no detectable rate
+    # limiting.
     # ==================================================================
-    return [
+    findings.append(
         Finding(
             id="SEC-AUTH-002",
             category="security",
@@ -2421,7 +2441,9 @@ def _analyze_project_rate_limiting(
                 "custom_rate_limit_detected": False,
             },
         )
-    ]
+    )
+
+    return findings
 
 
 def _contains_authentication_signal(

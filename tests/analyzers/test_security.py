@@ -317,10 +317,11 @@ def enforce_session():
 
     ids = finding_ids(findings)
 
-    # A generic request hook is not evidence of actual rate limiting.
-    # The analyzer deliberately reports this as a manual-review finding.
+    # A generic request hook is not evidence of actual rate limiting, so it
+    # is surfaced for manual review (SEC-AUTH-004) AND must not suppress the
+    # high-severity "rate limiting was not detected" finding (SEC-AUTH-002).
     assert "SEC-AUTH-004" in ids
-    assert "SEC-AUTH-002" not in ids
+    assert "SEC-AUTH-002" in ids
 
 
 def test_global_hook_with_rate_limit_logic_is_recognized(
@@ -360,7 +361,7 @@ def test_analyze_security_handles_missing_project(
 
     missing_path = tmp_path / "does-not-exist"
 
-    result = analyze_security(missing_path)
+    result = analyze_security(missing_path, run_bandit=False)
 
     assert result.success is False
     assert result.score == 0
@@ -373,7 +374,7 @@ def test_analyze_security_handles_empty_project(
 ) -> None:
     """An empty project should still produce a valid audit result."""
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     assert result.success is True
     assert result.project_path == str(tmp_path.resolve())
@@ -416,7 +417,7 @@ def checkout():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     rate_limit_findings = [
         finding
@@ -447,7 +448,7 @@ def profile():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     findings = [
         finding
@@ -482,7 +483,7 @@ def profile():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     assert not any(
         finding.id == "SEC-AUTH-005"
@@ -504,7 +505,7 @@ login_manager = LoginManager()
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     assert result.success is True
 
@@ -528,7 +529,7 @@ def index():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     assert not any(
         finding.id == "SEC-AUTH-005"
@@ -555,7 +556,7 @@ def login():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     assert not any(
         finding.id == "SEC-AUTH-005"
@@ -593,7 +594,7 @@ def profile():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     assert not any(
         finding.id == "SEC-AUTH-005"
@@ -638,7 +639,7 @@ def profile():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     findings = [
         finding
@@ -675,7 +676,7 @@ def profile():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     findings = [
         finding
@@ -710,7 +711,7 @@ def profile():
 """,
     )
 
-    result = analyze_security(tmp_path)
+    result = analyze_security(tmp_path, run_bandit=False)
 
     findings = [
         finding

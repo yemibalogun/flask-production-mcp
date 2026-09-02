@@ -9,14 +9,12 @@ from typing import Iterable
 from flask_production_mcp.models.findings import (
     AuditResult,
     AuditSummary,
+    Confidence,
     Finding,
     Severity,
 )
 
 # The score starts at 100 and deductions are applied for findings.
-#
-# These values are intentionally conservative for now. Later we can make
-# scoring category-aware and introduce confidence-based adjustments.
 SEVERITY_PENALTIES: dict[Severity, int] = {
     Severity.CRITICAL: 25,
     Severity.HIGH: 15,
@@ -24,6 +22,16 @@ SEVERITY_PENALTIES: dict[Severity, int] = {
     Severity.LOW: 3,
     Severity.INFO: 0,
 }
+
+# Low-confidence findings are static-analysis guesses. They still count,
+# but they must not tank a score or block a release on their own.
+CONFIDENCE_WEIGHT: dict[Confidence, float] = {
+    Confidence.HIGH: 1.0,
+    Confidence.MEDIUM: 0.5,
+    Confidence.LOW: 0.25,
+}
+
+_BLOCKER_SEVERITIES = frozenset({Severity.CRITICAL, Severity.HIGH})
 
 
 def build_summary(findings: Iterable[Finding]) -> AuditSummary:
@@ -41,7 +49,7 @@ def build_summary(findings: Iterable[Finding]) -> AuditSummary:
 
 
 def calculate_score(findings: Iterable[Finding]) -> int:
-    """Calculate a production-readiness score between 0 and 100."""
+    """Raw production-readiness score (0-100), severity-only penalties."""
 
     penalty = sum(
         SEVERITY_PENALTIES.get(finding.severity, 0)
@@ -49,6 +57,65 @@ def calculate_score(findings: Iterable[Finding]) -> int:
     )
 
     return max(0, 100 - penalty)
+
+
+def weighted_score(findings: Iterable[Finding]) -> int:
+    """
+    Confidence-weighted production-readiness score (0-100).
+
+    A high-confidence finding costs its full severity penalty; medium and
+    low confidence cost proportionally less. This keeps a long tail of
+    "consider an index"-style guesses from collapsing the score while a
+    confirmed critical still bites hard.
+    """
+
+    penalty = sum(
+        SEVERITY_PENALTIES.get(finding.severity, 0)
+        * CONFIDENCE_WEIGHT.get(finding.confidence, 1.0)
+        for finding in findings
+    )
+
+    return max(0, round(100 - penalty))
+
+
+def is_blocker(finding: Finding) -> bool:
+    """A blocker is a high-confidence critical/high-severity finding."""
+
+    return (
+        finding.severity in _BLOCKER_SEVERITIES
+        and finding.confidence is Confidence.HIGH
+    )
+
+
+def classify_findings(
+    findings: Iterable[Finding],
+) -> tuple[list[Finding], list[Finding], list[Finding]]:
+    """
+    Split findings into (blockers, advisories, notes).
+
+    - blockers  : high-confidence critical/high - these gate a release
+    - advisories: everything else at critical/high/medium severity -
+                  real, but needs a human judgement call
+    - notes     : low / info severity cleanups
+    """
+
+    blockers: list[Finding] = []
+    advisories: list[Finding] = []
+    notes: list[Finding] = []
+
+    for finding in findings:
+        if is_blocker(finding):
+            blockers.append(finding)
+        elif finding.severity in (
+            Severity.CRITICAL,
+            Severity.HIGH,
+            Severity.MEDIUM,
+        ):
+            advisories.append(finding)
+        else:
+            notes.append(finding)
+
+    return blockers, advisories, notes
 
 
 def is_python_file(path: Path) -> bool:
@@ -89,7 +156,7 @@ def build_audit_result(
     return AuditResult(
         success=True,
         project_path=str(project_path),
-        score=calculate_score(findings),
+        score=weighted_score(findings),
         findings=findings,
         summary=build_summary(findings),
         recommendations=recommendations_from_findings(findings),
