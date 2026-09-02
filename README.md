@@ -112,7 +112,7 @@ select = []                      # if set, run ONLY these
 ```yaml
 # .pre-commit-config.yaml
 repos:
-  - repo: https://github.com/<owner>/flask-production-mcp
+  - repo: https://github.com/yemibalogun/flask-production-mcp
     rev: v0.1.0
     hooks:
       - id: flask-production-audit
@@ -130,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: <owner>/flask-production-mcp@v0.1.0
+      - uses: yemibalogun/flask-production-mcp@v0.1.0
         with:
           path: .
           fail-on: blockers      # or advisories / any / never
