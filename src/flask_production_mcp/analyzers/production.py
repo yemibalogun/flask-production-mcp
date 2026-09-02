@@ -40,6 +40,7 @@ from flask_production_mcp.analyzers.flask import (
 )
 from flask_production_mcp.analyzers.security import analyze_security
 from flask_production_mcp.analyzers.templates import analyze_templates
+from flask_production_mcp.analyzers.testing import analyze_testing
 from flask_production_mcp.config import Config
 from flask_production_mcp.models.findings import Finding, Severity
 
@@ -92,6 +93,14 @@ def _run_deployment(root: Path, errors: list[str]) -> list[Finding]:
         return list(analyze_deployment(root))
     except Exception as exc:  # pragma: no cover - defensive
         errors.append(f"Deployment analyzer failed: {exc}")
+        return []
+
+
+def _run_testing(root: Path, errors: list[str]) -> list[Finding]:
+    try:
+        return list(analyze_testing(root))
+    except Exception as exc:  # pragma: no cover - defensive
+        errors.append(f"Testing analyzer failed: {exc}")
         return []
 
 
@@ -219,6 +228,7 @@ def analyze_production(
         "architecture": lambda e: _run_architecture(root, e),
         "templates": lambda e: _run_templates(root, endpoints, e),
         "deployment": lambda e: _run_deployment(root, e),
+        "testing": lambda e: _run_testing(root, e),
         "security": lambda e: _run_security(root, e, run_bandit),
         "database": lambda e: _run_database(root, e),
         "code_quality": lambda e: _run_code_quality(root, e),
@@ -248,6 +258,7 @@ def analyze_production(
         "architecture": raw["architecture"],
         "templates": raw["templates"],
         "deployment": raw["deployment"],
+        "testing": raw["testing"],
         "security": raw["security"],
         "database": raw["database"],
         "dependencies": dependency_findings,

@@ -10,6 +10,7 @@ from flask_production_mcp.tools.production import audit_flask_production
 from flask_production_mcp.tools.project import inspect_flask_project
 from flask_production_mcp.tools.security import audit_security
 from flask_production_mcp.tools.templates import audit_templates
+from flask_production_mcp.tools.testing import audit_testing
 
 mcp = FastMCP(
     "Flask Production MCP",
@@ -31,6 +32,7 @@ mcp.tool()(audit_security)
 mcp.tool()(audit_database)
 mcp.tool()(audit_dependencies)
 mcp.tool()(audit_deployment)
+mcp.tool()(audit_testing)
 mcp.tool()(audit_code_quality)
 mcp.tool()(audit_flask_production)
 

@@ -14,6 +14,7 @@ from flask_production_mcp.analyzers.dependencies import (
     _findings_for_manifest,
     _locate_package_line,
     _packages_from_lockfile,
+    _pins_from_pyproject,
     analyze_dependencies,
 )
 
@@ -193,6 +194,71 @@ def test_analyze_dependencies_scans_lockfile_when_no_requirements(
         "requests",
         "idna",
     }
+
+
+def test_pins_from_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "x"\n'
+        'dependencies = ["flask==3.1.3", "requests>=2", "jinja2"]\n'
+        "[project.optional-dependencies]\n"
+        'dev = ["pytest==9.1.1"]\n',
+        encoding="utf-8",
+    )
+
+    pinned, unpinned = _pins_from_pyproject(tmp_path / "pyproject.toml")
+
+    assert dict(pinned) == {"flask": "3.1.3", "pytest": "9.1.1"}
+    assert unpinned == 2
+
+
+def test_analyze_dependencies_scans_pyproject_pins(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "x"\n'
+        'dependencies = ["requests==2.19.1", "jinja2"]\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        deps, "_run_pip_audit", lambda i, r, t: (_SAMPLE_REPORT, None)
+    )
+
+    result = analyze_dependencies(tmp_path)
+
+    assert result["scanned"] is True
+    assert result["manifests"] == ["pyproject.toml"]
+    assert {f.metadata["package"] for f in result["findings"]} == {
+        "requests",
+        "idna",
+    }
+    # the unpinned jinja2 is surfaced as a coverage-gap note
+    assert any("not pinned" in e for e in result["errors"])
+
+
+def test_requirements_file_takes_precedence_over_pyproject(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "flask==3.1.3\n", encoding="utf-8"
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["requests==2.19.1"]\n',
+        encoding="utf-8",
+    )
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        deps,
+        "_run_pip_audit",
+        lambda i, r, t: (seen.append(i.name) or ({"dependencies": []}, None)),
+    )
+
+    result = analyze_dependencies(tmp_path)
+
+    assert result["manifests"] == ["requirements.txt"]
 
 
 def test_backup_requirements_are_ignored(tmp_path: Path, monkeypatch) -> None:

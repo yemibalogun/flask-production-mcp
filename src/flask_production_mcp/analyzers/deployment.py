@@ -78,6 +78,7 @@ def _iter_deploy_files(root: Path) -> list[Path]:
         if not path.is_file() or should_exclude_path(path, root):
             continue
         name = path.name.lower()
+        path_parts = {p.lower() for p in path.parts}
         if (
             name in wanted_names
             or name.startswith("dockerfile")
@@ -85,6 +86,17 @@ def _iter_deploy_files(root: Path) -> list[Path]:
             or re.match(r"compose.*\.ya?ml$", name)
             or re.match(r"gunicorn.*\.(py|conf)$", name)
             or re.match(r".*\.env(\..+)?$", name)
+            or name == "nginx.conf"
+            or name.endswith(".nginx")
+            or (
+                name.endswith(".conf")
+                and (
+                    "nginx" in path_parts
+                    or "sites-available" in path_parts
+                    or "sites-enabled" in path_parts
+                    or "conf.d" in path_parts
+                )
+            )
         ):
             files.append(path)
     return files
@@ -411,6 +423,140 @@ def _check_gunicorn(path: Path, text: str) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Nginx
+# ---------------------------------------------------------------------------
+
+_PROXY_PASS = re.compile(r"proxy_pass\s+http", re.IGNORECASE)
+_SERVER_BLOCK = re.compile(r"\bserver\s*\{")
+
+
+def _check_nginx(path: Path, text: str) -> list[Finding]:
+    findings: list[Finding] = []
+    lower = text.lower()
+    proxy_match = _PROXY_PASS.search(text)
+
+    if "server_tokens off" not in lower:
+        findings.append(
+            Finding(
+                id="DEPLOY-NGINX-001",
+                category="deployment",
+                severity=Severity.LOW,
+                confidence=Confidence.MEDIUM,
+                title="Nginx `server_tokens` is not off",
+                description=(
+                    "Without `server_tokens off;` Nginx advertises its "
+                    "exact version in response headers and error pages, "
+                    "which helps an attacker target known CVEs."
+                ),
+                recommendation="Add `server_tokens off;` in the http block.",
+                file=str(path),
+                line=None,
+                metadata={},
+            )
+        )
+
+    if proxy_match and not re.search(
+        r"proxy_set_header\s+X-Forwarded-Proto", text, re.IGNORECASE
+    ):
+        findings.append(
+            Finding(
+                id="DEPLOY-NGINX-002",
+                category="deployment",
+                severity=Severity.MEDIUM,
+                confidence=Confidence.MEDIUM,
+                title="Reverse proxy does not forward client headers",
+                description=(
+                    "A `proxy_pass` to the app was found with no "
+                    "`proxy_set_header X-Forwarded-Proto` (and usually also "
+                    "X-Forwarded-For / Host). Flask's ProxyFix then cannot "
+                    "see the real client IP or that the request was HTTPS, "
+                    "so url_for(_external=True) builds http:// URLs and "
+                    "rate limiting keys on the proxy's IP."
+                ),
+                recommendation=(
+                    "In the proxy location add: "
+                    "`proxy_set_header Host $host;` "
+                    "`proxy_set_header X-Forwarded-For "
+                    "$proxy_add_x_forwarded_for;` "
+                    "`proxy_set_header X-Forwarded-Proto $scheme;`"
+                ),
+                file=str(path),
+                line=_line_of(text, proxy_match.start()),
+                metadata={},
+            )
+        )
+
+    if "client_max_body_size" not in lower and proxy_match:
+        findings.append(
+            Finding(
+                id="DEPLOY-NGINX-003",
+                category="deployment",
+                severity=Severity.LOW,
+                confidence=Confidence.MEDIUM,
+                title="No `client_max_body_size` set",
+                description=(
+                    "Nginx defaults `client_max_body_size` to 1 MB and "
+                    "rejects anything larger with 413 before it reaches "
+                    "Flask - so file uploads fail regardless of Flask's "
+                    "MAX_CONTENT_LENGTH."
+                ),
+                recommendation=(
+                    "Set `client_max_body_size` to match the app's upload "
+                    "limit (e.g. `client_max_body_size 10m;`)."
+                ),
+                file=str(path),
+                line=None,
+                metadata={},
+            )
+        )
+
+    # A config that already sets X-Forwarded-Proto is designed for a proxy
+    # chain where TLS is terminated upstream, so `listen 80` there is
+    # expected rather than a mistake.
+    terminates_tls_upstream = re.search(
+        r"proxy_set_header\s+X-Forwarded-Proto", text, re.IGNORECASE
+    )
+    has_https_block = re.search(r"listen\s+[^;]*\b443\b", text)
+
+    for match in _SERVER_BLOCK.finditer(text):
+        block = text[match.end() : match.end() + 1200]
+        if (
+            re.search(r"listen\s+[^;]*\b80\b", block)
+            and not re.search(
+                r"return\s+30[12]\s+https|rewrite\s+.*https",
+                block,
+                re.IGNORECASE,
+            )
+            and not terminates_tls_upstream
+            and not has_https_block
+        ):
+            findings.append(
+                Finding(
+                    id="DEPLOY-NGINX-004",
+                    category="deployment",
+                    severity=Severity.MEDIUM,
+                    confidence=Confidence.LOW,
+                    title="Port 80 server block has no HTTPS redirect",
+                    description=(
+                        "A server block listens on port 80 without an "
+                        "obvious redirect to HTTPS, so the site is served "
+                        "over plain HTTP."
+                    ),
+                    recommendation=(
+                        "Serve the app only on 443 and make the port-80 "
+                        "block `return 301 https://$host$request_uri;`."
+                    ),
+                    file=str(path),
+                    line=_line_of(text, match.start()),
+                    metadata={},
+                )
+            )
+            break
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Procfile / entrypoint scripts
 # ---------------------------------------------------------------------------
 
@@ -510,6 +656,8 @@ def analyze_deployment(project_path: str | Path) -> list[Finding]:
             findings.extend(_check_compose(path, text))
         elif re.match(r"gunicorn.*\.(py|conf)$", name):
             findings.extend(_check_gunicorn(path, text))
+        elif name == "nginx.conf" or name.endswith((".nginx", ".conf")):
+            findings.extend(_check_nginx(path, text))
         elif name == "procfile" or name.endswith(".sh"):
             findings.extend(_check_process_file(path, text))
         elif ".env" in name:

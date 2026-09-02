@@ -1,5 +1,5 @@
 name: "Flask Production Audit"
-description: "Static production-readiness audit for Flask applications (architecture, templates, security, database, dependencies, code quality)."
+description: "Static production-readiness audit for Flask applications (architecture, templates, deployment, testing, security, database, dependencies, code quality)."
 branding:
   icon: "shield"
   color: "blue"
@@ -34,7 +34,10 @@ runs:
 
     - name: Install flask-production-mcp
       shell: bash
-      run: pip install "${{ github.action_path }}"
+      run: |
+        extra=""
+        [ "${{ inputs.skip-deps }}" = "true" ] && [ "${{ inputs.skip-bandit }}" = "true" ] || extra="[scanners]"
+        pip install "${{ github.action_path }}${extra}"
 
     - name: Run audit
       shell: bash

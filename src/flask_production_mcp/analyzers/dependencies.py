@@ -10,6 +10,7 @@ crash and never a false "all clear".
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -94,6 +95,61 @@ def _scan_target(
     if error is not None:
         return [], error
     return _findings_for_manifest(report_as, report or {}), None
+
+
+def _scan_pairs(
+    pairs: list[tuple[str, str]],
+    report_as: Path,
+    root: Path,
+    timeout: int,
+) -> tuple[list[Finding], str | None]:
+    """Write ``name==version`` pairs to a temp file and scan it."""
+
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write("\n".join(f"{n}=={v}" for n, v in pairs))
+        temp_path = Path(handle.name)
+    try:
+        return _scan_target(temp_path, report_as, root, timeout)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+_SPECIFIER = re.compile(
+    r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]+\])?\s*===?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9._-]*)"
+)
+
+
+def _pins_from_pyproject(
+    pyproject: Path,
+) -> tuple[list[tuple[str, str]], int]:
+    """Return (exactly-pinned (name, version) pairs, count of unpinned)."""
+
+    try:
+        with pyproject.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return [], 0
+
+    project = data.get("project", {})
+    specs: list[str] = list(project.get("dependencies", []))
+    for group in (project.get("optional-dependencies", {}) or {}).values():
+        if isinstance(group, list):
+            specs.extend(group)
+
+    pinned: list[tuple[str, str]] = []
+    unpinned = 0
+    for spec in specs:
+        if not isinstance(spec, str):
+            continue
+        match = _SPECIFIER.match(spec)
+        if match:
+            pinned.append((match.group(1), match.group(2)))
+        else:
+            unpinned += 1
+    return pinned, unpinned
 
 
 def _locate_package_line(manifest: Path, package: str) -> int | None:
@@ -290,17 +346,19 @@ def analyze_dependencies(
 
     manifests = _find_requirements_files(root)
     lockfiles = [root / name for name in _LOCK_FILES if (root / name).is_file()]
+    pyproject = root / "pyproject.toml"
     errors: list[str] = []
     findings: list[Finding] = []
     scanned_names: list[str] = []
     scanned_any = False
 
-    if not manifests and not lockfiles:
+    if not manifests and not lockfiles and not pyproject.is_file():
         return {
             "findings": [],
             "errors": [
-                "No requirements*.txt or lock file (uv.lock / poetry.lock / "
-                "Pipfile.lock) found; dependency scanning was skipped."
+                "No requirements*.txt, lock file (uv.lock / poetry.lock / "
+                "Pipfile.lock) or pyproject.toml found; dependency "
+                "scanning was skipped."
             ],
             "manifests": [],
             "scanned": False,
@@ -315,36 +373,45 @@ def analyze_dependencies(
         scanned_any = True
         findings.extend(extra)
 
-    # Lock files only add value where nothing is already pinned in a
-    # requirements file for that project.
+    # Lock files and pyproject only add value where nothing is already
+    # pinned in a requirements file for that project.
     if not manifests:
         for lock_path in lockfiles:
             pairs = _packages_from_lockfile(lock_path)
             if not pairs:
                 errors.append(f"Could not parse {lock_path.name}")
                 continue
-            with tempfile.NamedTemporaryFile(
-                "w",
-                suffix=".txt",
-                delete=False,
-                encoding="utf-8",
-            ) as handle:
-                handle.write(
-                    "\n".join(f"{name}=={version}" for name, version in pairs)
-                )
-                temp_path = Path(handle.name)
-            try:
-                extra, error = _scan_target(
-                    temp_path, lock_path, root, timeout
-                )
-            finally:
-                temp_path.unlink(missing_ok=True)
+            extra, error = _scan_pairs(pairs, lock_path, root, timeout)
             scanned_names.append(lock_path.name)
             if error is not None:
                 errors.append(error)
                 continue
             scanned_any = True
             findings.extend(extra)
+
+    if not manifests and not lockfiles and pyproject.is_file():
+        pinned, unpinned = _pins_from_pyproject(pyproject)
+        if pinned:
+            extra, error = _scan_pairs(pinned, pyproject, root, timeout)
+            scanned_names.append(pyproject.name)
+            if error is not None:
+                errors.append(error)
+            else:
+                scanned_any = True
+                findings.extend(extra)
+        if unpinned:
+            errors.append(
+                f"{unpinned} dependenc"
+                f"{'y' if unpinned == 1 else 'ies'} in pyproject.toml "
+                "are not pinned to an exact version and could not be "
+                "checked. Add a lock file (uv lock / poetry lock) for "
+                "full coverage."
+            )
+        elif not pinned:
+            errors.append(
+                "pyproject.toml has no pinned dependencies to scan; add a "
+                "lock file for dependency vulnerability coverage."
+            )
 
     return {
         "findings": findings,

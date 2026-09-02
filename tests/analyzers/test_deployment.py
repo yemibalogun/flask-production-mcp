@@ -151,3 +151,58 @@ def test_gitignored_env_file_is_not_flagged(tmp_path: Path) -> None:
 def test_env_example_is_never_flagged(tmp_path: Path) -> None:
     _write(tmp_path, ".env.example", "SECRET_KEY=\n")
     assert analyze_deployment(tmp_path) == []
+
+
+# --- nginx ---------------------------------------------------------------
+
+
+def test_flags_edge_nginx_without_forwarded_headers(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "nginx/nginx.conf",
+        "server {\n"
+        "    listen 80;\n"
+        "    location / {\n"
+        "        proxy_pass http://app:8000;\n"
+        "    }\n"
+        "}\n",
+    )
+
+    ids = _ids(tmp_path)
+    assert "DEPLOY-NGINX-002" in ids  # no X-Forwarded-Proto
+    assert "DEPLOY-NGINX-003" in ids  # no client_max_body_size
+    assert "DEPLOY-NGINX-004" in ids  # listen 80, no redirect
+
+
+def test_well_configured_proxy_nginx_only_flags_server_tokens(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "nginx/nginx.conf",
+        "server {\n"
+        "    listen 80;\n"
+        "    client_max_body_size 10m;\n"
+        "    location / {\n"
+        "        proxy_pass http://app:8000;\n"
+        "        proxy_set_header Host $host;\n"
+        "        proxy_set_header X-Forwarded-For "
+        "$proxy_add_x_forwarded_for;\n"
+        "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+        "    }\n"
+        "}\n",
+    )
+
+    # X-Forwarded-Proto present -> not treated as an edge server, so only
+    # the server_tokens hygiene note remains.
+    assert _ids(tmp_path) == ["DEPLOY-NGINX-001"]
+
+
+def test_server_tokens_off_clears_nginx_001(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "nginx/nginx.conf",
+        "http {\n    server_tokens off;\n}\n",
+    )
+
+    assert "DEPLOY-NGINX-001" not in _ids(tmp_path)

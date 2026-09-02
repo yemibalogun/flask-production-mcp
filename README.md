@@ -8,17 +8,18 @@ three ways:
 - an **MCP server** so an AI coding agent can call it while building
 
 It answers *"is this Flask app ready to deploy?"* — not just *"does it have
-security bugs?"* — across six areas:
+security bugs?"* — across nine categories:
 
 | Category | What it checks |
 | --- | --- |
 | **flask** | app-factory / blueprint discovery, route inventory, duplicate routes, debug mode enabled |
 | **architecture** | extensions bound at import time, module-level `Flask()` beside a factory, hardcoded `SECRET_KEY` fallback, `db.create_all()` instead of migrations, unguarded `app.run()`, unregistered blueprints |
 | **templates** | POST forms with no CSRF field, `\| safe` / `{% autoescape false %}` on dynamic data, `url_for()` to an endpoint that doesn't exist |
-| **deployment** | Dockerfile running as root, dev server as the container command, base image on `:latest`, debug mode via env, secrets baked into an image/compose file, DB port published to the host, Gunicorn `reload = True`, dev server in a Procfile/entrypoint, committed `.env` |
+| **deployment** | Dockerfile running as root, dev server as the container command, base image on `:latest`, debug mode via env, secrets baked into an image/compose file, DB port published to the host, Gunicorn `reload = True`, dev server in a Procfile/entrypoint, committed `.env`, Nginx (`server_tokens`, missing forwarded headers, `client_max_body_size`, HTTP-only edge) |
+| **testing** | no test suite at all, a low line-rate in an existing `coverage.xml`, a test count that looks thin next to the number of routes |
 | **security** | `eval`/`exec`, `pickle` loads, hardcoded secrets, missing auth on sensitive routes, **missing rate limiting**, debug config — plus **Bandit**, folded in and de-duplicated |
 | **database** | SQLAlchemy models / relationships / indexes, raw SQL, missing indexes on filtered columns, likely N+1 access |
-| **dependencies** | known CVEs in `requirements*.txt` — or `uv.lock` / `poetry.lock` / `Pipfile.lock` when there is no requirements file — via **pip-audit** (PyPI + OSV advisory databases) |
+| **dependencies** | known CVEs via **pip-audit** (PyPI + OSV) — `requirements*.txt`, or `uv.lock` / `poetry.lock` / `Pipfile.lock`, or the exact-pinned deps in a bare `pyproject.toml` |
 | **code_quality** | bare/broad `except`, `print()`, `breakpoint()`, `assert` in app code, `TODO`/`FIXME` (test modules excluded) |
 
 All analysis is **static**. The target application is never imported or
@@ -43,12 +44,17 @@ collapsed below the score floor (default 50).
 
 ```bash
 pip install flask-production-mcp
+
+# with the dependency-CVE and Bandit scanners:
+pip install "flask-production-mcp[scanners]"
+
 # or, from a checkout:
-uv sync
+uv sync --extra scanners
 ```
 
-Python 3.13+. `pip-audit` and `bandit` are installed as dependencies; the
-CVE scan needs network access.
+Python 3.11+. The base install is MCP + the static analyzers. The
+`scanners` extra adds `pip-audit` (needs network) and `bandit`; without
+it the audit reports those scans as skipped rather than failing.
 
 ## CLI
 
@@ -59,11 +65,13 @@ flask-production-mcp audit path/to/your/flask/app
 ```
 Flask Production Audit  --  /path/to/app
 ------------------------------------------------------------
-Overall score  84/100          NOT READY
+Overall score  71/100          NOT READY
 
   flask          100   clean
   architecture    96   1 finding
   templates       55   1 finding (1 blocker)
+  deployment     100   clean
+  testing         92   1 finding
   security       100   clean
   database        76   6 findings
   dependencies   100   clean
@@ -168,7 +176,8 @@ Then: *"Run a production audit on /path/to/my_flask_app and list the blockers."*
 | `audit_flask` | Flask route/debug findings. |
 | `audit_architecture` | Flask-architecture rules. |
 | `audit_templates` | Jinja/HTML template findings. |
-| `audit_deployment` | Dockerfile / compose / Gunicorn / Procfile findings. |
+| `audit_deployment` | Dockerfile / compose / Gunicorn / Nginx / Procfile findings. |
+| `audit_testing` | Test-suite presence and rough adequacy. |
 | `audit_security` | Security audit (incl. Bandit). |
 | `audit_database` | Database architecture + performance findings. |
 | `audit_dependencies` | Dependency CVE scan. |
@@ -197,11 +206,12 @@ src/flask_production_mcp/
 │   ├── flask.py            # discovery + analyze_flask
 │   ├── architecture.py     # Flask-architecture rules
 │   ├── templates.py        # Jinja/HTML rules
+│   ├── deployment.py       # Dockerfile / compose / Gunicorn / Nginx rules
+│   ├── testing.py          # test-suite health
 │   ├── security.py         # analyze_security
 │   ├── bandit_scan.py      # Bandit integration
-│   ├── deployment.py       # Dockerfile / compose / Gunicorn rules
 │   ├── database.py         # analyze_database
-│   ├── dependencies.py     # pip-audit integration (requirements + lock files)
+│   ├── dependencies.py     # pip-audit (requirements / lock / pyproject pins)
 │   ├── code_quality.py     # analyze_code_quality_file
 │   └── production.py       # analyze_production (unified, parallel)
 └── tools/                  # one thin MCP wrapper per analyzer
@@ -209,6 +219,9 @@ src/flask_production_mcp/
 
 ## Scope
 
-Not covered yet: Nginx config, bare `pyproject.toml` dependency scanning
-(lock files and `requirements*.txt` only), performance profiling,
-test-coverage analysis, and any dynamic/runtime testing.
+Everything is **static** — the app is never run. So it does not do
+performance profiling or dynamic/runtime security testing (both need a
+live app + database), and the `testing` category reads an existing
+`coverage.xml` rather than producing one. Unpinned dependencies in a bare
+`pyproject.toml` can't be resolved to exact versions without installing —
+add a lock file for full CVE coverage.

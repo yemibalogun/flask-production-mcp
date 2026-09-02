@@ -22,6 +22,7 @@ _CATEGORY_ORDER = [
     "architecture",
     "templates",
     "deployment",
+    "testing",
     "security",
     "database",
     "dependencies",

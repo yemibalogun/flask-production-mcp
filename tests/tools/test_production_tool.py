@@ -51,6 +51,7 @@ def test_production_audit_runs_every_analyzer(
         "architecture",
         "templates",
         "deployment",
+        "testing",
         "security",
         "database",
         "dependencies",
@@ -123,6 +124,11 @@ def test_low_confidence_findings_do_not_block(tmp_path: Path) -> None:
         f"{body}\n"
         "    return {'ok': True}\n",
         encoding="utf-8",
+    )
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_health.py").write_text(
+        "def test_health():\n    assert True\n", encoding="utf-8"
     )
 
     result = _audit(tmp_path)
